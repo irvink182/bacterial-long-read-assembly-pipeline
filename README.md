@@ -223,15 +223,15 @@ The pipeline uses a tab-delimited samplesheet (for example, a `.tsv` extension) 
 ### Example samplesheet
 | Sample_ID | asm_type | expected_genome_size | long_reads | short_r1 | short_r2 |
 |---|---|---:|---|---|---|
-| EPI00579 | hybrid | 5000000 | EPI00579.fastq.gz | EPI00579.R1.clean.fastq.gz | EPI00579.R2.clean.fastq.gz |
-| EPI00580 | long | 5100000 | EPI00580.fastq.gz | NA | NA |
+| isolate1 | hybrid | 6000000 | isolate1.fastq.gz | isolate1.R1.fastq.gz | isolate1.R2.fastq.gz |
+| isolate_2 | long | 5300000 | isolate_2.fastq.gz | NA | NA |
 
 Example as TSV:
 
 ```tsv
 Sample_ID	asm_type	expected_genome_size	long_reads	short_r1	short_r2
-EPI00579	hybrid	5000000	EPI00579.fastq.gz	EPI00579.R1.clean.fastq.gz	EPI00579.R2.clean.fastq.gz
-EPI00580	long	5100000	EPI00580.fastq.gz	NA	NA
+isolate1	hybrid	5000000	isolate1.fastq.gz	isolate1.R1.fastq.gz	isolate1.R2.fastq.gz
+isolate_2	long	5300000	isolate_2.fastq.gz	NA	NA
 ```
 
 ## Expected outputs
