@@ -1,0 +1,12 @@
+name: env_taxonomy
+
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  - mlst
+  - skani
+  - sourmash
+  - parallel

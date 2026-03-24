@@ -1,0 +1,15 @@
+name: env_assembly
+
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  - flye
+  - medaka
+  - minimap2
+  - pypolca
+  - samtools
+  - seqkit
+  - python=3.10

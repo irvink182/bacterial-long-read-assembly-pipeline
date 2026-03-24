@@ -1,0 +1,10 @@
+name: env_quast
+
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  - quast
+  - multiqc

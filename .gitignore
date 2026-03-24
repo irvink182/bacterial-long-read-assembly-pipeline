@@ -1,0 +1,78 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# R
+# =========================
+.Rhistory
+.RData
+.Rproj.user/
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+*.out
+*.err
+
+# =========================
+# Raw data
+# =========================
+data/raw_reads/
+
+# =========================
+# Pipeline results
+# =========================
+results/
+
+# =========================
+# Large bioinformatics files
+# =========================
+*.bam
+*.bai
+*.sam
+*.cram
+*.crai
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.fa
+*.fasta
+*.fna
+*.faa
+
+# =========================
+# Compressed archives
+# =========================
+*.zip
+*.tar
+*.tar.gz
+
+# =========================
+# Temporary / intermediate files
+# =========================
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# =========================
+# Editor / OS
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+
+# =========================
+# Local user-specific files
+# =========================
+config/config.sh
+config/databases.config
+samplesheet.tsv

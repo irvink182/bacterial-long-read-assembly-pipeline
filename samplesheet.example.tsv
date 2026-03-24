@@ -1,0 +1,3 @@
+Sample	asm_type	expected_genome_size	long_reads	short_r1	short_r2
+isolate1	hybrid	6000000	isolate1.fastq.gz   isolate1.R1.fastq.gz  isolate1.R2.clean.fastq.gz
+isolate_2	long	5300000	isolate_2.fastq.gz   NA  NA

@@ -1,0 +1,9 @@
+name: sylph
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - bioconda::sylph
+  - bioconda::sylph-tax
+  - bioconda::datamash

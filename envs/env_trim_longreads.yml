@@ -1,0 +1,14 @@
+name: env_trim_longreads
+
+channels:
+  - bioconda
+  - conda-forge
+
+dependencies:
+  - fastplong
+  - porechop
+  - filtlong
+  - nanostat
+  - multiqc
+  - seqkit
+  - pigz

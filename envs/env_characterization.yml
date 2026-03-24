@@ -1,0 +1,9 @@
+name: env_characterization
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - ncbi-amrfinderplus
+  - mob_suite
+  - plasmidfinder
