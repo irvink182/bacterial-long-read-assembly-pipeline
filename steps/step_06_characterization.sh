@@ -7,6 +7,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SCRIPTS_DIR="${ROOT_DIR}/scripts"
+SCRIPT_SUMMARY="${SCRIPTS_DIR}/amrfinder_unique_symbols_by_type_and_class.py"
+SCRIPT_MATRIX="${SCRIPTS_DIR}/amrfinder_presence_absence_by_type.py"
+SCRIPT_HEATMAP="${SCRIPTS_DIR}/plot_amrfinder_heatmap_amr_virulence.py"
+SCRIPT_PLASMIDFINDER_SUMMARY="${SCRIPTS_DIR}/summarize_plasmidfinder.py"
 
 CONFIG_FILE="${ROOT_DIR}/config/config.sh"
 DB_FILE="${ROOT_DIR}/config/databases.config"
@@ -74,12 +79,15 @@ mkdir -p "${CHARACTERIZATION_LOG_DIR}"
 # CHECK CONDA ENVS
 ############################################
 
-for env_name in "${ENV_ANALYSIS}" "${ENV_CHARACTERIZATION}"; do
-    if ! conda env list | awk '{print $1}' | grep -Fxq "${env_name}"; then
-        echo "ERROR: conda environment not found: ${env_name}"
-        exit 1
-    fi
-done
+if ! conda env list | awk '{print $1}' | grep -Fxq "${ENV_CHARACTERIZATION}"; then
+    echo "ERROR: conda environment not found: ${ENV_CHARACTERIZATION}"
+    exit 1
+fi
+
+if ! conda env list | awk '{print $1}' | grep -Fxq "${ENV_ANALYSIS}"; then
+    echo "ERROR: conda environment not found: ${ENV_ANALYSIS}"
+    exit 1
+fi
 
 ############################################
 # FUNCTIONS
@@ -136,6 +144,13 @@ run_mobtyper() {
         --sample_id "${sample_id}" \
         --out_file "${outfile}"
 }
+
+export ENV_CHARACTERIZATION ENV_ANALYSIS
+export INPUT_FASTA_DIR BAKTA_DIR
+export AMRFINDER_INDIVIDUAL_DIR AMRFINDER_SUMMARY_DIR PLASMIDFINDER_INDIVIDUAL_DIR PLASMIDFINDER_SUMMARY_DIR
+export MOBSUITE_INDIVIDUAL_DIR MOBSUITE_SUMMARY_DIR
+export CHARACTERIZATION_LOG_DIR
+export -f run_amrfinder run_plasmidfinder run_mobtyper
 
 ############################################
 # MAIN
