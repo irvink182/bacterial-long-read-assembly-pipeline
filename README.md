@@ -1,4 +1,4 @@
-# Bacterial WGS long-read / hybrid pipeline (v1.0)
+# Bacterial WGS long-read / hybrid pipeline (v1.1)
 A modular pipeline for bacterial genome assembly and genomic characterization using long-read sequencing data, with optional short-read polishing for hybrid workflows.
 
 ## Overview
