@@ -1,5 +1,5 @@
 # Bacterial WGS long-read / hybrid pipeline (v1.0)
-A modular pipeline for bacterial whole-genome sequencing (WGS) analysis from long-read data, with optional short-read polishing for hybrid workflows.
+A modular pipeline for bacterial genome assembly and genomic characterization using long-read sequencing data, with optional short-read polishing for hybrid workflows.
 
 ## Overview
 This pipeline processes bacterial sequencing data from raw reads to a final integrated summary table including:
@@ -12,7 +12,7 @@ This pipeline processes bacterial sequencing data from raw reads to a final inte
 - Genomic characterization
 - Final Summary Table
 
-The workflow is currently implemented as a series of modular Bash scripts (`step_01` to `step_07`) invoked through a main launcher script (`run_all_pipeline.sh`).
+The workflow is currently implemented as a series of modular Bash scripts (`step_01` to `step_08`) invoked through a main launcher script (`run_all_pipeline.sh`).
 
 Two analysis modes are supported:
 
@@ -98,13 +98,14 @@ Project/
 │   ├── step_05_annotation.sh
 │   ├── step_06_characterization.sh
 │   └── step_07_final_summary.sh
+│   └── step_08_cleanup.sh
 ├── run_all_pipeline.sh
 ├── run_pipeline.sh
 ├── samplesheet.tsv
 └── README.md
 ```
 ## Installation
-### conda distribution
+### Conda distribution
 Before installing the piepñine, make sure that you have installed `Conda` distribution in your system. 
 If `conda` is not available on your system, you need to install the distribution first.
 
@@ -117,7 +118,7 @@ bash ~/miniconda.sh
 - [Conda installation guide](https://docs.conda.io/docs/user-guide/install/download.html)
 - [Installing on Linux](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
 
-### pipeline installation
+### Pipeline installation
 Clone the repository and create the required conda environments from the `envs/` directory.
 
 Example:
@@ -132,6 +133,41 @@ conda env create -f envs/env_annotation.yml
 conda env create -f envs/env_characterization.yml
 conda env create -f envs/env_analysis.yml
 ```
+## Databases
+
+Several tools in this pipeline require external reference databases. These databases are not distributed with the repository and must be downloaded separately.
+
+Below is a list of required databases and their official sources:
+
+- **Sourmash (taxonomy search)**
+  - https://github.com/sourmash-bio/sourmash
+  - Pre-built databases: https://sourmash.readthedocs.io/en/latest/databases.html
+
+- **Skani (ANI-based taxonomy)**
+  - https://github.com/bluenote-1577/skani
+  - Database installation instructions are available in the repository : https://github.com/bluenote-1577/skani/wiki/Tutorial:-setting-up-the-GTDB-genome-database-to-search-against
+
+- **CheckM2 (genome quality assessment)**
+  - https://github.com/chklovski/CheckM2
+  - Database download instructions: https://github.com/chklovski/CheckM2#database-installation
+
+- **Bakta (genome annotation)**
+  - https://github.com/oschwengers/bakta
+  - Database download: https://github.com/oschwengers/bakta?tab=readme-ov-file#database-download
+
+- **AMRFinderPlus (antimicrobial resistance)**
+  - https://github.com/ncbi/amr
+  - Database installation instructions are available in the repository : https://github.com/oschwengers/bakta?tab=readme-ov-file#database-download
+
+- **PlasmidFinder**
+  - https://github.com/genomicepidemiology/plasmidfinder
+  - Database installation instructions are available in the repository
+
+- **MLST**
+  - https://github.com/tseemann/mlst
+  - Uses PubMLST databases: https://pubmlst.org/
+
+Note: Some databases can be large (>10–100 GB). Ensure sufficient disk space before downloading.
 
 ## Configuration
 Pipeline internal settings (paths, prefixes, etc) are stored in:
@@ -141,16 +177,26 @@ Pipeline internal settings (paths, prefixes, etc) are stored in:
 
 Please note that before running the pipeline, make sure all database paths are correctly defined for your system.
 
-## Running the pipeline
-To run the complete pipeline (`all seven steps`), use:
+## Usage
+### Run full pipeline
+To run the complete pipeline (`all steps`), use:
 ```bash
 bash run_all_pipeline.sh --samples samplesheet.tsv --trimmer porechop_filtlong
+```
+
+The pipeline performs a `cleanup` step to remove intermediate files. To skip cleanup step:
+```bash
+bash run_all_pipeline.sh --samples samplesheet.tsv --trimmer porechop_filtlong --no-cleanup
+```
+The pipeline includes a `resume` mode if you want to continue with the analyis. To perform this mode:
+```bash
+bash run_all_pipeline.sh --samples samplesheet.tsv --resume
 ```
 Please note that if you want to use `fastplong` instead of porechop & filtlong, you have to run `--trimmer fastplong` option:
 ```bash
 bash run_all_pipeline.sh --samples samplesheet.tsv --trimmer fastplong
 ```
-
+### Run individual step
 You can also run a specific step of the pipeline.
 For example, if you want to perform only the `trimming` step:
 ```bash
@@ -163,7 +209,6 @@ bash run_pipeline.sh --step taxonomy --samples samplesheet.tsv
 ```
 
 ## Pipeline steps
-
 ### `step_01_trimming.sh`
 Long-read preprocessing:
 - read trimming with `fastplong` or `porechop + filtlong`
@@ -205,6 +250,12 @@ Final reporting:
 - merge of all summary tables
 - Final report per-sample
 
+### `step_08_cleanup.sh`
+Removo instermediate files:
+- Assembly intermediate files: `Flye` `Medaka`
+- Reads prefiltering files: `porechop`
+- Temporary fules from characterization tools
+
 ### Input samplesheet
 
 The pipeline uses a tab-delimited samplesheet (for example, a `.tsv` extension) with header
@@ -223,15 +274,15 @@ The pipeline uses a tab-delimited samplesheet (for example, a `.tsv` extension) 
 ### Example samplesheet
 | Sample_ID | asm_type | expected_genome_size | long_reads | short_r1 | short_r2 |
 |---|---|---:|---|---|---|
-| isolate1 | hybrid | 6000000 | isolate1.fastq.gz | isolate1.R1.fastq.gz | isolate1.R2.fastq.gz |
-| isolate_2 | long | 5300000 | isolate_2.fastq.gz | NA | NA |
+| EPI00579 | hybrid | 5000000 | EPI00579.fastq.gz | EPI00579.R1.clean.fastq.gz | EPI00579.R2.clean.fastq.gz |
+| EPI00580 | long | 5100000 | EPI00580.fastq.gz | NA | NA |
 
 Example as TSV:
 
 ```tsv
 Sample_ID	asm_type	expected_genome_size	long_reads	short_r1	short_r2
-isolate1	hybrid	5000000	isolate1.fastq.gz	isolate1.R1.fastq.gz	isolate1.R2.fastq.gz
-isolate_2	long	5300000	isolate_2.fastq.gz	NA	NA
+EPI00579	hybrid	5000000	EPI00579.fastq.gz	EPI00579.R1.clean.fastq.gz	EPI00579.R2.clean.fastq.gz
+EPI00580	long	5100000	EPI00580.fastq.gz	NA	NA
 ```
 
 ## Expected outputs

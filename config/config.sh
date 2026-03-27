@@ -297,13 +297,13 @@ ENV_CHARACTERIZATION="${ENV_CHARACTERIZATION:-env_characterization}"
 #ENV_MOBSUITE="${ENV_MOBSUITE:-mob_suite}"
 #ENV_PLASMIDFINDER="${ENV_PLASMIDFINDER:-epitools}"
 
-ENV_ANALYSIS="${ENV_ANALYSIS:-env_analysis}"
+ENV_ANALYSIS="${ENV_ANALYSIS:-python_r_utils_env}"
 
 #### Helper scripts
 RSCRIPT_PLOT="${RSCRIPT_PLOT:-scripts/abundance_species_plot.R}"
 MERGE_TAXONOMY_BIN="${MERGE_TAXONOMY_BIN:-scripts/merge_taxonomy_reports.py}"
-#SCRIPT_SUMMARY="${SCRIPT_SUMMARY:-scripts/amrfinder_unique_symbols_by_type_and_class.py}"
-#SCRIPT_MATRIX="${SCRIPT_MATRIX:-scripts/amrfinder_presence_absence_by_type.py}"
-#SCRIPT_HEATMAP="${SCRIPT_HEATMAP:-scripts/plot_amrfinder_heatmap_amr_virulence.py}"
-#SCRIPT_PLASMIDFINDER_SUMMARY="${SCRIPT_PLASMIDFINDER_SUMMARY:-scripts/summarize_plasmidfinder.py}"
+#SCRIPT_SUMMARY="${SCRIPT_SUMMARY:-amrfinder_unique_symbols_by_type_and_class.py}"
+#SCRIPT_MATRIX="${SCRIPT_MATRIX:-amrfinder_presence_absence_by_type.py}"
+#SCRIPT_HEATMAP="${SCRIPT_HEATMAP:-plot_amrfinder_heatmap_amr_virulence.py}"
+#SCRIPT_PLASMIDFINDER_SUMMARY="${SCRIPT_PLASMIDFINDER_SUMMARY:-summarize_plasmidfinder.py}"
 SCRIPT_MERGE_FINAL_REPORT="${SCRIPT_MERGE_FINAL_REPORT:-scripts/merge_final_report.py}"

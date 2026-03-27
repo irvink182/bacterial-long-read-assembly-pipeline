@@ -70,9 +70,3 @@ results/
 Thumbs.db
 .vscode/
 
-# =========================
-# Local user-specific files
-# =========================
-config/config.sh
-config/databases.config
-samplesheet.tsv

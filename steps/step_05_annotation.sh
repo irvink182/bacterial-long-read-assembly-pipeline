@@ -10,29 +10,55 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CONFIG_FILE="${ROOT_DIR}/config/config.sh"
 DB_FILE="${ROOT_DIR}/config/databases.config"
-
+UTILS_FILE="${ROOT_DIR}/scripts/utils.sh"
 
 [[ -f "${CONFIG_FILE}" ]] || { echo "[ERROR] Config file not found: ${CONFIG_FILE}" >&2; exit 1; }
 [[ -f "${DB_FILE}" ]] || { echo "[ERROR] Database config file not found: ${DB_FILE}" >&2; exit 1; }
+[[ -f "${UTILS_FILE}" ]] || { echo "[ERROR] Utils config file not found: ${UTILS_FILE}" >&2; exit 1; }
 
 source "${CONFIG_FILE}"
 source "${DB_FILE}"
-source "${ROOT_DIR}/scripts/utils.sh"
+source "${UTILS_FILE}"
 
 ############################################
 # ARGUMENTS
 ############################################
 
 SAMPLES=""
+TRIMMER=""
+RESUME="false"
+FORCE="false"
+export RESUME
+export FORCE
 
+# =========================
+# Parse arguments
+# =========================
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --samples)
             SAMPLES="$2"
             shift 2
             ;;
+        --trimmer)
+            TRIMMER="$2"
+            shift 2
+            ;;
+        --resume)
+            RESUME="true"
+            shift
+            ;;
+        --force)
+            FORCE="true"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
         *)
-            echo "ERROR: unknown argument: $1"
+            echo "[ERROR] Unknown argument: $1" >&2
+            usage >&2
             exit 1
             ;;
     esac
@@ -43,6 +69,12 @@ if [[ -z "${SAMPLES}" ]]; then
 fi
 
 require_file "${SAMPLES}" "samples file"
+
+# =========================
+# Info
+# =========================
+log_info "Starting annotation step"
+[[ "${RESUME}" == "true" ]] && log_info "Resume mode enabled"
 
 ############################################
 # DIRECTORIES
@@ -115,7 +147,7 @@ echo "Summary dir        : ${ANNOTATION_SUMMARY_DIR}"
 echo "ENV_ANNOTATION     : ${ENV_ANNOTATION}"
 echo "=================================================="
 
-tail -n +2 "${SAMPLES}" | while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
+while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
 do
     [[ -z "${SAMPLE_ID}" ]] && continue
 
@@ -138,6 +170,9 @@ do
     SAMPLE_BAKTA_DIR="${BAKTA_DIR}/${SAMPLE_ID}"
     SAMPLE_LOG="${ANNOTATION_LOG_DIR}/${SAMPLE_ID}.bakta.log"
 
+    # RESUME LOGIC
+    should_skip_sample "${SAMPLE_LOG}" && continue
+
     mkdir -p "${SAMPLE_BAKTA_DIR}"
 
     if [[ ! -f "${ASSEMBLY_FASTA}" ]]; then
@@ -159,7 +194,8 @@ do
     } > "${SAMPLE_LOG}" 2>&1
 
     echo "Done: ${SAMPLE_ID}"
-done
+
+done < <(tail -n +2 "${SAMPLES}")
 
 ############################################
 # MULTIQC REPORT
@@ -168,24 +204,25 @@ done
 echo
 echo "[INFO] Creating Bakta MultiQC report"
 
-cd "${BAKTA_DIR}"
-
-conda run --no-capture-output -n "${ENV_ANNOTATION}" \
+BAKTA_SUMMARY_REPORT="${ANNOTATION_SUMMARY_DIR}/multiqc_bakta_report.tsv"
+# RESUME LOGIC
+if should_skip_global "${BAKTA_SUMMARY_REPORT}"; then
+    log_info "Skipping MultiQC (BAKTA)"
+else
+    log_info "Running MultiQC (BAKTA)"
+    cd "${BAKTA_DIR}"
+    conda run --no-capture-output -n "${ENV_ANNOTATION}" \
     multiqc . --force --cl-config "max_table_rows: 3000" \
     > "${ANNOTATION_LOG_DIR}/multiqc_bakta.stdout.log" \
     2> "${ANNOTATION_LOG_DIR}/multiqc_bakta.stderr.log" || true
-
-if [[ -f "multiqc_report.html" ]]; then
+    
     mv multiqc_report.html multiqc_bakta_report.html
     cp multiqc_bakta_report.html "${ANNOTATION_SUMMARY_DIR}/"
-fi
-
-if [[ -f "multiqc_data/multiqc_bakta.txt" ]]; then
     mv multiqc_data/multiqc_bakta.txt multiqc_data/multiqc_bakta_report.tsv
     cp multiqc_data/multiqc_bakta_report.tsv "${ANNOTATION_SUMMARY_DIR}/"
-fi
 
-cd "${ROOT_DIR}"
+    cd "${ROOT_DIR}"
+fi
 
 echo "[INFO] ANNOTATION module completed"
 echo "[DONE] Outputs written to: ${ROOT_DIR}/${ANNOTATION_RESULTS_DIR}"

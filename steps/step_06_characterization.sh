@@ -7,37 +7,65 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SCRIPTS_DIR="${ROOT_DIR}/scripts"
-SCRIPT_SUMMARY="${SCRIPTS_DIR}/amrfinder_unique_symbols_by_type_and_class.py"
-SCRIPT_MATRIX="${SCRIPTS_DIR}/amrfinder_presence_absence_by_type.py"
-SCRIPT_HEATMAP="${SCRIPTS_DIR}/plot_amrfinder_heatmap_amr_virulence.py"
-SCRIPT_PLASMIDFINDER_SUMMARY="${SCRIPTS_DIR}/summarize_plasmidfinder.py"
 
 CONFIG_FILE="${ROOT_DIR}/config/config.sh"
 DB_FILE="${ROOT_DIR}/config/databases.config"
-
+UTILS_FILE="${ROOT_DIR}/scripts/utils.sh"
 
 [[ -f "${CONFIG_FILE}" ]] || { echo "[ERROR] Config file not found: ${CONFIG_FILE}" >&2; exit 1; }
 [[ -f "${DB_FILE}" ]] || { echo "[ERROR] Database config file not found: ${DB_FILE}" >&2; exit 1; }
+[[ -f "${UTILS_FILE}" ]] || { echo "[ERROR] Utils config file not found: ${UTILS_FILE}" >&2; exit 1; }
 
 source "${CONFIG_FILE}"
 source "${DB_FILE}"
-source "${ROOT_DIR}/scripts/utils.sh"
+source "${UTILS_FILE}"
+
+#HELPER SCRIPTS
+SCRIPT_SUMMARY="${ROOT_DIR}/scripts/amrfinder_unique_symbols_by_type_and_class.py"
+SCRIPT_MATRIX="${ROOT_DIR}/scripts/amrfinder_presence_absence_by_type.py"
+SCRIPT_HEATMAP="${ROOT_DIR}/scripts/plot_amrfinder_heatmap_amr_virulence.py"
+SCRIPT_PLASMIDFINDER_SUMMARY="${ROOT_DIR}/scripts/summarize_plasmidfinder.py"
+
 
 ############################################
 # ARGUMENTS
 ############################################
 
 SAMPLES=""
+TRIMMER=""
+RESUME="false"
+FORCE="false"
+export RESUME
+export FORCE
 
+# =========================
+# Parse arguments
+# =========================
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --samples)
             SAMPLES="$2"
             shift 2
             ;;
+        --trimmer)
+            TRIMMER="$2"
+            shift 2
+            ;;
+        --resume)
+            RESUME="true"
+            shift
+            ;;
+        --force)
+            FORCE="true"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
         *)
-            echo "ERROR: unknown argument: $1"
+            echo "[ERROR] Unknown argument: $1" >&2
+            usage >&2
             exit 1
             ;;
     esac
@@ -48,6 +76,12 @@ if [[ -z "${SAMPLES}" ]]; then
 fi
 
 require_file "${SAMPLES}" "samples file"
+
+# =========================
+# Info
+# =========================
+log_info "Starting characterization step"
+[[ "${RESUME}" == "true" ]] && log_info "Resume mode enabled"
 
 ############################################
 # DIRECTORIES
@@ -64,6 +98,9 @@ PLASMIDFINDER_SUMMARY_DIR="${ROOT_DIR}/${PLASMIDFINDER_SUMMARY_DIR}"
 
 MOBSUITE_INDIVIDUAL_DIR="${ROOT_DIR}/${MOBSUITE_INDIVIDUAL_DIR}"
 MOBSUITE_SUMMARY_DIR="${ROOT_DIR}/${MOBSUITE_SUMMARY_DIR}"
+
+MLST_INDIVIDUAL_DIR="${ROOT_DIR}/${MLST_INDIVIDUAL_DIR}"
+MLST_SUMMARY_DIR="${ROOT_DIR}/${MLST_SUMMARY_DIR}"
 
 CHARACTERIZATION_LOG_DIR="${ROOT_DIR}/${LOG_DIR}/characterization"
 
@@ -168,7 +205,7 @@ echo "=================================================="
 
 echo "[INFO] Step A: GENOMIC CHARACTERIZATION"
 
-tail -n +2 "${SAMPLES}" | while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
+while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
 do
     [[ -z "${SAMPLE_ID}" ]] && continue
 
@@ -206,27 +243,93 @@ do
         exit 1
     fi
 
+
+    # =========================
+    # Define outputs
+    # =========================
+
+    AMRFINDER_OUTFILE="${AMRFINDER_INDIVIDUAL_DIR}/${SAMPLE_ID}.${AMRFINDER_PREFIX}.result.tsv"
+    PLASMIDFINDER_OUT="${PLASMIDFINDER_SAMPLE_DIR}/results.txt"
+    MOBSUITE_OUTFILE="${MOBSUITE_INDIVIDUAL_DIR}/${SAMPLE_ID}.${MOBSUITE_PREFIX}.result.tsv"
+    MLST_OUT="${MLST_INDIVIDUAL_DIR}/${SAMPLE_ID}.mlst.tsv"
+
+    RUN_AMR=true
+    RUN_PLASMID=true
+    RUN_MOBSUITE=true
+    RUN_MLST=true
+
+    # =========================
+    # Resume logic
+    # =========================
+
+    if [[ "${RESUME}" == "true" && -s "${AMRFINDER_OUTFILE}" ]]; then
+        log_info "Skipping AMRFinder for ${SAMPLE_ID}"
+        RUN_AMR=false
+    fi
+
+    if [[ "${RESUME}" == "true" && -s "${PLASMIDFINDER_OUT}" ]]; then
+        log_info "Skipping PlasmidFinder for ${SAMPLE_ID}"
+        RUN_PLASMID=false
+    fi
+
+    if [[ "${RESUME}" == "true" && -s "${MOBSUITE_OUTFILE}" ]]; then
+        log_info "Skipping MobTyper for ${SAMPLE_ID}"
+        RUN_MOBSUITE=false
+    fi
+
+    if [[ "${RESUME}" == "true" && -s "${MLST_OUT}" ]]; then
+        log_info "Skipping MLST for ${SAMPLE_ID}"
+        RUN_MLST=false
+    fi
+
+    # skip total
+    if [[ "${RUN_AMR}" == "false" && "${RUN_PLASMID}" == "false" && "${RUN_MOBSUITE}" == "false" && "${RUN_MLST}" == "false" ]]; then
+        log_info "Skipping ${SAMPLE_ID}: all characterization outputs exist"
+        continue
+    fi
+
     {
         echo "[INFO] Sample: ${SAMPLE_ID}"
         echo "[INFO] Assembly: ${ASSEMBLY_FASTA}"
         echo "[INFO] Bakta dir: ${BAKTA_SAMPLE_DIR}"
 
-        echo "[INFO] AMRFinderPlus: ${SAMPLE_ID}"
-        run_amrfinder "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${BAKTA_SAMPLE_DIR}" "${AMRFINDER_OUTFILE}"
-        echo "[DONE] AMRFinderPlus: ${SAMPLE_ID}"
+        # =========================
+        # AMRFinder
+        # =========================
+        if [[ "${RUN_AMR}" == "true" ]]; then
+            echo "[INFO] Running AMRFinder"
+            run_amrfinder "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${BAKTA_SAMPLE_DIR}" "${AMRFINDER_OUTFILE}"
+            echo "[DONE] AMRFinderPlus: ${SAMPLE_ID}"
+        else
+            echo "[INFO] AMRFinder skipped"
+        fi
 
-        echo "[INFO] PlasmidFinder: ${SAMPLE_ID}"
-        run_plasmidfinder "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${PLASMIDFINDER_SAMPLE_DIR}"
-        echo "[DONE] PlasmidFinder: ${SAMPLE_ID}"
+        # =========================
+        # PlasmidFinder
+        # =========================
+        if [[ "${RUN_PLASMID}" == "true" ]]; then
+            echo "[INFO] Running PlasmidFinder"
+            run_plasmidfinder "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${PLASMIDFINDER_SAMPLE_DIR}"
+            echo "[DONE] PlasmidFinder: ${SAMPLE_ID}"
+        else
+            echo "[INFO] PlasmidFinder skipped"
+        fi
 
-        echo "[INFO] MOB-typer: ${SAMPLE_ID}"
-        run_mobtyper "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${MOBSUITE_OUTFILE}"
-        echo "[DONE] MOB-typer: ${SAMPLE_ID}"
+        # =========================
+        # Mobsuite - MobTyper
+        # =========================
+        if [[ "${RUN_MOBSUITE}" == "true" ]]; then
+            echo "[INFO] Running MOB-typer"
+            run_mobtyper "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${MOBSUITE_OUTFILE}"
+            echo "[DONE] MOB-typer: ${SAMPLE_ID}"
+        else
+            echo "[INFO] MOB-typer skipped"
+        fi
 
     } > "${SAMPLE_LOG}" 2>&1
 
     echo "Done: ${SAMPLE_ID}"
-done
+done < <(tail -n +2 "${SAMPLES}")
 
 ############################################
 # STEP B: AMRFINDER COMBINED TABLE

@@ -138,6 +138,60 @@ abs_path() {
     fi
 }
 
+# ==========================================
+# Resume / skip utilities
+# ==========================================
+
+should_skip_sample() {
+    local output_file="$1"
+
+    if [[ "${FORCE:-false}" == "true" ]]; then
+        return 1
+    fi
+
+    if [[ "${RESUME:-false}" == "true" && -s "${output_file}" ]]; then
+        log_info "Skipping ${SAMPLE_ID}: output already exists -> ${output_file}"
+        return 0
+    fi
+
+    return 1
+}
+
+should_skip_multiple_outputs() {
+    # skip only if ALL outputs exist
+    local files=("$@")
+
+    if [[ "${FORCE:-false}" == "true" ]]; then
+        return 1
+    fi
+
+    if [[ "${RESUME:-false}" != "true" ]]; then
+        return 1
+    fi
+
+    for f in "${files[@]}"; do
+        [[ -s "$f" ]] || return 1
+    done
+
+    log_info "Skipping ${SAMPLE_ID}: all outputs already exist"
+    return 0
+}
+
+should_skip_global() {
+    local output_file="$1"
+
+    if [[ "${FORCE:-false}" == "true" ]]; then
+        return 1
+    fi
+
+    if [[ "${RESUME:-false}" == "true" && -s "${output_file}" ]]; then
+        log_info "Skipping step: output already exists -> ${output_file}"
+        return 0
+    fi
+
+    return 1
+}
+
 # ------------------------------------------------------------
 # CPU detection helper
 # ------------------------------------------------------------

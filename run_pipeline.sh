@@ -6,21 +6,24 @@ ROOT_DIR="${SCRIPT_DIR}"
 
 STEPS_DIR="${ROOT_DIR}/steps"
 SCRIPTS_DIR="${ROOT_DIR}/scripts"
-CONFIG_DIR="${ROOT_DIR}/config}"
+CONFIG_DIR="${ROOT_DIR}/config"
 
 CONFIG_FILE="${ROOT_DIR}/config/config.sh"
 DB_FILE="${ROOT_DIR}/config/databases.config"
-
+UTILS_FILE="${ROOT_DIR}/scripts/utils.sh"
 
 [[ -f "${CONFIG_FILE}" ]] || { echo "[ERROR] Config file not found: ${CONFIG_FILE}" >&2; exit 1; }
 [[ -f "${DB_FILE}" ]] || { echo "[ERROR] Database config file not found: ${DB_FILE}" >&2; exit 1; }
 
-source "${CONFIG_FILE}"
-source "${DB_FILE}"
+# =========================
+# Defaults
+# =========================
 
 STEP=""
 SAMPLES=""
 TRIMMER_OVERRIDE=""
+RESUME="false"
+FORCE="false"
 
 usage() {
     echo "Usage:"
@@ -33,6 +36,8 @@ usage() {
     echo "  taxonomy"
     echo "  annotation"
     echo "  characterization"
+    echo "  final_summary"
+    echo "  cleanup"
     echo "  all"
     echo
     echo "Optional overrides:"
@@ -54,12 +59,32 @@ while [[ $# -gt 0 ]]; do
             TRIMMER_OVERRIDE="$2"
             shift 2
             ;;
+        --resume)
+            RESUME="true"
+            shift
+            ;;
+        --force)
+            FORCE="true"
+            shift
+            ;;
         *)
             echo "Unknown argument: $1"
             usage
+            exit 1
             ;;
     esac
 done
+
+source "${CONFIG_FILE}"
+source "${DB_FILE}"
+export RESUME
+export FORCE
+
+if [[ "${FORCE}" == "true" ]]; then
+    RESUME="false"
+fi
+
+echo "[DEBUG run_pipeline] RESUME=${RESUME}"
 
 [[ -z "${STEP}" ]] && usage
 [[ -z "${SAMPLES}" ]] && usage
@@ -102,7 +127,14 @@ run_step() {
     echo "Script       : ${script_path}"
     echo "=================================================="
 
-    bash "${script_path}" --samples "${SAMPLES}"
+    STEP_ARGS=(--samples "${SAMPLES}")
+    [[ "${RESUME}" == "true" ]] && STEP_ARGS+=(--resume)
+
+    if [[ -n "${TRIMMER:-}" ]]; then
+        STEP_ARGS+=(--trimmer "${TRIMMER}")
+    fi
+
+    bash "${script_path}" "${STEP_ARGS[@]}"
 }
 
 case "${STEP}" in
@@ -127,6 +159,9 @@ case "${STEP}" in
     final_summary)
         run_step "final_summary" "${STEPS_DIR}/step_07_final_summary.sh"
         ;;
+    cleanup)
+        run_step "cleanup" "${STEPS_DIR}/step_08_cleanup.sh"
+        ;;
     all)
         run_step "trimming" "${STEPS_DIR}/step_01_trimming.sh"
         run_step "assembly" "${STEPS_DIR}/step_02_assembly.sh"
@@ -135,6 +170,7 @@ case "${STEP}" in
         run_step "annotation" "${STEPS_DIR}/step_05_annotation.sh"
         run_step "characterization" "${STEPS_DIR}/step_06_characterization.sh"
         run_step "final_summary" "${STEPS_DIR}/step_07_final_summary.sh"
+        run_step "cleanup" "${STEPS_DIR}/step_08_cleanup.sh"
         ;;
     *)
         echo "Invalid step: ${STEP}"

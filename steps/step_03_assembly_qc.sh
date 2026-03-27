@@ -10,29 +10,55 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CONFIG_FILE="${ROOT_DIR}/config/config.sh"
 DB_FILE="${ROOT_DIR}/config/databases.config"
-
+UTILS_FILE="${ROOT_DIR}/scripts/utils.sh"
 
 [[ -f "${CONFIG_FILE}" ]] || { echo "[ERROR] Config file not found: ${CONFIG_FILE}" >&2; exit 1; }
 [[ -f "${DB_FILE}" ]] || { echo "[ERROR] Database config file not found: ${DB_FILE}" >&2; exit 1; }
+[[ -f "${UTILS_FILE}" ]] || { echo "[ERROR] Utils config file not found: ${UTILS_FILE}" >&2; exit 1; }
 
 source "${CONFIG_FILE}"
 source "${DB_FILE}"
-source "${ROOT_DIR}/scripts/utils.sh"
+source "${UTILS_FILE}"
 
 ############################################
 # ARGUMENTS
 ############################################
 
 SAMPLES=""
+TRIMMER=""
+RESUME="false"
+FORCE="false"
+export RESUME
+export FORCE
 
+# =========================
+# Parse arguments
+# =========================
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --samples)
             SAMPLES="$2"
             shift 2
             ;;
+        --trimmer)
+            TRIMMER="$2"
+            shift 2
+            ;;
+        --resume)
+            RESUME="true"
+            shift
+            ;;
+        --force)
+            FORCE="true"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
         *)
-            echo "ERROR: unknown argument: $1"
+            echo "[ERROR] Unknown argument: $1" >&2
+            usage >&2
             exit 1
             ;;
     esac
@@ -43,6 +69,12 @@ if [[ -z "${SAMPLES}" ]]; then
 fi
 
 require_file "${SAMPLES}" "samples file"
+
+# =========================
+# Info
+# =========================
+log_info "Starting assembly_qc step"
+[[ "${RESUME}" == "true" ]] && log_info "Resume mode enabled"
 
 ############################################
 # DIRECTORIES
@@ -130,7 +162,7 @@ echo "CheckM2 dir        : ${CHECKM2_DIR}"
 echo "Conda env          : ${ENV_QUAST} & ${ENV_CHECKM2}"
 echo "=================================================="
 
-tail -n +2 "${SAMPLES}" | while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
+while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
 do
     [[ -z "${SAMPLE_ID}" ]] && continue
 
@@ -140,7 +172,6 @@ do
     echo "--------------------------------------------------"
 
     validate_asm_type "${ASM_TYPE}"
-
 
     if is_na "${EXPECTED_GENOME_SIZE}"; then
         log_warn "sample ${SAMPLE_ID} has empty expected_genome_size"
@@ -156,30 +187,68 @@ do
 
     SAMPLE_LOG="${QC_LOG_DIR}/${SAMPLE_ID}.assembly_qc.log"
 
+    # =========================
+    # Define expected outputs
+    # =========================
+    QUAST_REPORT="${SAMPLE_QUAST_DIR}/report.tsv"
+    CHECKM2_REPORT="${SAMPLE_CHECKM2_DIR}/${SAMPLE_ID}.${CHECKM2_PREFIX}.quality_report.tsv"
+
+    RUN_QUAST=true
+    RUN_CHECKM2=true
+
+    # =========================
+    # Resume logic (granular)
+    # =========================
+    if [[ "${RESUME}" == "true" && -s "${QUAST_REPORT}" ]]; then
+        log_info "Skipping QUAST for ${SAMPLE_ID}"
+        RUN_QUAST=false
+    fi
+
+    if [[ "${RESUME}" == "true" && -s "${CHECKM2_REPORT}" ]]; then
+        log_info "Skipping CheckM2 for ${SAMPLE_ID}"
+        RUN_CHECKM2=false
+    fi
+
+    # Si ambos existen → skip total
+    if [[ "${RUN_QUAST}" == "false" && "${RUN_CHECKM2}" == "false" ]]; then
+        log_info "Skipping ${SAMPLE_ID}: all QC outputs already exist"
+        continue
+    fi
+
     mkdir -p "${SAMPLE_QUAST_DIR}"
     mkdir -p "${SAMPLE_CHECKM2_DIR}"
-
-    if [[ ! -f "${ASSEMBLY_FASTA}" ]]; then
-        echo "ERROR: final assembly not found for ${SAMPLE_ID}: ${ASSEMBLY_FASTA}"
-        exit 1
-    fi
 
     {
         echo "[INFO] Sample: ${SAMPLE_ID}"
         echo "[INFO] Assembly: ${ASSEMBLY_FASTA}"
 
-        echo "[INFO] QUAST: ${SAMPLE_ID}"
-        run_quast "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_QUAST_DIR}"
-        echo "[INFO] QUAST: ${SAMPLE_ID} finished"
+        # =========================
+        # QUAST
+        # =========================
+        if [[ "${RUN_QUAST}" == "true" ]]; then
+            echo "[INFO] QUAST: ${SAMPLE_ID}"
+            run_quast "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_QUAST_DIR}"
+            echo "[INFO] QUAST: ${SAMPLE_ID} finished"
+        else
+            echo "[INFO] QUAST skipped"
+        fi
 
-        echo "[INFO] CHECKM2: ${SAMPLE_ID}"
-        run_checkm2 "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_CHECKM2_DIR}"
-        echo "[INFO] CHECKM2: ${SAMPLE_ID} finished"
+        # =========================
+        # CHECKM2
+        # =========================
+        if [[ "${RUN_CHECKM2}" == "true" ]]; then
+            echo "[INFO] CHECKM2: ${SAMPLE_ID}"
+            run_checkm2 "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_CHECKM2_DIR}"
+            echo "[INFO] CHECKM2: ${SAMPLE_ID} finished"
+        else
+            echo "[INFO] CHECKM2 skipped"
+        fi
 
     } > "${SAMPLE_LOG}" 2>&1
 
     echo "Done: ${SAMPLE_ID}"
-done
+
+done < <(tail -n +2 "${SAMPLES}")
 
 ############################################
 # MULTIQC FOR QUAST
@@ -188,27 +257,26 @@ done
 echo
 echo "[INFO] Creating QUAST summary report"
 
-cd "${QUAST_DIR}"
+QUAST_SUMMARY_REPORT="${QUAST_SUMMARY_DIR}/multiqc_quast_report.tsv"
+# RESUME LOGIC
+if should_skip_global "${QUAST_SUMMARY_REPORT}"; then
+    log_info "Skipping MultiQC (QUAST)"
+else
+    log_info "Running MultiQC (QUAST)"
 
-conda run -n "${ENV_QUAST}" multiqc . --force --cl-config "max_table_rows: 3000" \
+    cd "${QUAST_DIR}"
+    conda run -n "${ENV_QUAST}" multiqc . --force --cl-config "max_table_rows: 3000" \
     > "${QC_LOG_DIR}/multiqc_quast.stdout.log" \
     2> "${QC_LOG_DIR}/multiqc_quast.stderr.log" || true
 
-if [[ -f "multiqc_report.html" ]]; then
     mv multiqc_report.html multiqc_quast_report.html
-fi
-
-if [[ -f "multiqc_data/multiqc_quast.txt" ]]; then
     mv multiqc_data/multiqc_quast.txt multiqc_data/multiqc_quast_report.tsv
     sed -i 's/\.0//g' multiqc_data/multiqc_quast_report.tsv
     cp multiqc_data/multiqc_quast_report.tsv "${QUAST_SUMMARY_DIR}/"
-fi
-
-if [[ -f "multiqc_quast_report.html" ]]; then
     cp multiqc_quast_report.html "${QUAST_SUMMARY_DIR}/"
-fi
 
-cd "${ROOT_DIR}"
+    cd "${ROOT_DIR}"
+fi
 
 ############################################
 # CHECKM2 SUMMARY
@@ -220,7 +288,7 @@ CHECKM2_SUMMARY_FILE="${CHECKM2_SUMMARY_DIR}/checkm2_summary.tsv"
 FIRST=1
 > "${CHECKM2_SUMMARY_FILE}"
 
-tail -n +2 "${SAMPLES}" | while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
+while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
 do
     [[ -z "${SAMPLE_ID}" ]] && continue
 
@@ -236,6 +304,6 @@ do
                 >> "${CHECKM2_SUMMARY_FILE}"
         fi
     fi
-done
+done < <(tail -n +2 "${SAMPLES}")
 
 echo "[INFO] ASSEMBLY QC module completed"
