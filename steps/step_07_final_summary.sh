@@ -84,12 +84,12 @@ mkdir -p "${FINAL_SUMMARY_LOG_DIR}"
 OUT_TSV="${FINAL_SUMMARY_DIR}/final_master_table.tsv"
 OUT_XLSX="${FINAL_SUMMARY_DIR}/final_master_table.xlsx"
 
-READS_QC_FILE="${ROOT_DIR}/results/reads/qc/multiqc/clean/multiqc_nanostats_clean_report.txt"
-QUAST_FILE="${ROOT_DIR}/${QUAST_SUMMARY_DIR}/multiqc_quast_report.tsv"
+READS_QC_DIR="${ROOT_DIR}/results/reads/qc/nanostat_clean"
+QUAST_DIR="${ROOT_DIR}/${QUAST_INDIVIDUAL_DIR}"
 CHECKM2_FILE="${ROOT_DIR}/${CHECKM2_SUMMARY_DIR}/checkm2_summary.tsv"
 TAXONOMY_FILE="${ROOT_DIR}/${TAXONOMY_MERGED_DIR}/final_species_table.tsv"
 MLST_FILE="${ROOT_DIR}/${MLST_SUMMARY_DIR}/complete_mlst_table.tsv"
-BAKTA_FILE="${ROOT_DIR}/${ANNOTATION_SUMMARY_DIR}/multiqc_bakta_report.tsv"
+BAKTA_DIR="${ROOT_DIR}/${BAKTA_DIR}"
 AMR_FILE="${ROOT_DIR}/${AMRFINDER_SUMMARY_DIR}/amrfinder.result.combined.tsv"
 PLASMIDFINDER_FILE="${ROOT_DIR}/${PLASMIDFINDER_SUMMARY_DIR}/plasmidfinder_inc_types.tsv"
 MOBTYPER_FILE="${ROOT_DIR}/${MOBSUITE_SUMMARY_DIR}/mobtyper.result.combined.tsv"
@@ -108,8 +108,6 @@ fi
 ############################################
 
 for f in \
-    "${READS_QC_FILE}" \
-    "${QUAST_FILE}" \
     "${CHECKM2_FILE}" \
     "${TAXONOMY_FILE}" \
     "${MLST_FILE}" \
@@ -123,8 +121,18 @@ do
     fi
 done
 
-if [[ ! -f "${BAKTA_FILE}" ]]; then
-    echo "ERROR: Bakta file not found: ${BAKTA_FILE}"
+if [[ ! -d "${READS_QC_DIR}" ]]; then
+    echo "ERROR: Reads nanostats directory not found: ${READS_QC_DIR}"
+    exit 1
+fi
+
+if [[ ! -d "${QUAST_DIR}" ]]; then
+    echo "ERROR: QUAST directory not found: ${QUAST_DIR}"
+    exit 1
+fi
+
+if [[ ! -d "${BAKTA_DIR}" ]]; then
+    echo "ERROR: Bakta directory not found: ${BAKTA_DIR}"
     exit 1
 fi
 
@@ -135,12 +143,12 @@ fi
 echo "=================================================="
 echo "STEP 07: FINAL SUMMARY"
 echo "Samples file         : ${SAMPLES}"
-echo "Reads QC file        : ${READS_QC_FILE}"
-echo "QUAST file           : ${QUAST_FILE}"
+echo "Reads QC file        : ${READS_QC_DIR}"
+echo "QUAST directory      : ${QUAST_DIR}"
 echo "CheckM2 file         : ${CHECKM2_FILE}"
 echo "Taxonomy file        : ${TAXONOMY_FILE}"
 echo "MLST file            : ${MLST_FILE}"
-echo "Bakta file            : ${BAKTA_FILE}"
+echo "Bakta file           : ${BAKTA_DIR}"
 echo "AMR file             : ${AMR_FILE}"
 echo "PlasmidFinder file   : ${PLASMIDFINDER_FILE}"
 echo "MOB-typer file       : ${MOBTYPER_FILE}"
@@ -152,12 +160,12 @@ echo "=================================================="
 conda run --no-capture-output -n "${ENV_ANALYSIS}" python3 \
     "${SCRIPT_MERGE_FINAL_REPORT}" \
     --samples "${SAMPLES}" \
-    --reads-qc "${READS_QC_FILE}" \
-    --quast "${QUAST_FILE}" \
+    --reads-qc "${READS_QC_DIR}" \
+    --quast "${QUAST_DIR}" \
     --checkm2 "${CHECKM2_FILE}" \
     --taxonomy "${TAXONOMY_FILE}" \
     --mlst "${MLST_FILE}" \
-    --bakta "${BAKTA_FILE}" \
+    --bakta "${BAKTA_DIR}" \
     --amr "${AMR_FILE}" \
     --plasmidfinder "${PLASMIDFINDER_FILE}" \
     --mobtyper "${MOBTYPER_FILE}" \
