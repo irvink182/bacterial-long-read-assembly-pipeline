@@ -4,6 +4,8 @@ import sys
 import csv
 from glob import glob
 
+DEFAULT_EMPTY="none"
+
 def find_results_file(sample_dir):
     """
     Try common PlasmidFinder output filenames.
@@ -31,7 +33,7 @@ def main(root_dir, out_tsv):
 
         res = find_results_file(sample_dir)
         if res is None:
-            rows.append((sample, ""))
+            rows.append((sample, DEFAULT_EMPTY))
             continue
 
         incs = []
@@ -59,7 +61,13 @@ def main(root_dir, out_tsv):
                     incs.append(inc)
 
         incs = sorted(set(incs))
-        rows.append((sample, ";".join(incs)))
+
+        if len(incs) == 0:
+            inc_str = DEFAULT_EMPTY
+        else:
+            inc_str = ";".join(incs)
+
+        rows.append((sample, inc_str))
 
     with open(out_tsv, "w", newline="") as f:
         w = csv.writer(f, delimiter="\t")

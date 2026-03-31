@@ -83,6 +83,13 @@ def main():
     amr = read_matrix(args.amr)
     vir = read_matrix(args.virulence)
 
+    # matrices checks
+    if amr.shape[1] == 0:
+        print ("[WARN] AMR matrix has no genes")
+    if vir.shape[1] == 0:
+        print ("[WARN] VIRULENCE matrix has no genes")
+
+
     # Keep shared samples only
     shared_samples = sorted(set(amr.index) & set(vir.index))
     if len(shared_samples) == 0:
@@ -93,9 +100,20 @@ def main():
     # Select + order genes
     amr_top = select_and_order(amr, args.top_amr, args.order)
     vir_top = select_and_order(vir, args.top_vir, args.order)
+    # Combine matrices robustly
+    if amr_top.shape[1] == 0 and vir_top.shape[1] == 0:
+        raise ValueError("Both AMR and VIRULENCE matrices are empty. Nothing to plot.")
+    
+    elif vir_top.shape[1] == 0:
+        print("[WARN] No VIRULENCE genes. Plotting AMR only.")
+        combined = amr_top
 
-    # Combine side-by-side
-    combined = pd.concat([amr_top, vir_top], axis=1)
+    elif amr_top.shape[1] == 0:
+        print("[WARN] No AMR genes. Plotting VIRULENCE only.")
+        combined = vir_top
+
+    else:
+        combined = pd.concat([amr_top, vir_top], axis=1)
 
     # ---- Plot ----
     plt.figure(figsize=(args.figwidth, args.figheight))

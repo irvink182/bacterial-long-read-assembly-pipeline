@@ -47,7 +47,14 @@ def main():
     for t in types:
         sub = df[df["Type"] == t].copy()
         if sub.empty:
-            print(f"[WARN] No rows for Type={t}. Skipping.")
+            print(f"[WARN] No rows for Type={t}. Creating empty matrix.")
+
+            mat = pd.DataFrame(index=all_samples)
+
+            out = f"{args.outprefix}.{t}.presence_absence.tsv"
+            mat.reset_index().rename(columns={"index": "sample"}).to_csv(out, sep="\t", index=False)
+
+            print(f"Wrote EMPTY {out} (samples={len(all_samples)}, symbols=0)")
             continue
 
         # Presence/absence: 1 if symbol present in sample
