@@ -83,6 +83,7 @@ log_info "Starting assembly_qc step"
 INPUT_FASTA_DIR="${ROOT_DIR}/${FINAL_ASM_DIR}"
 
 QUAST_DIR="${ROOT_DIR}/${QUAST_DIR}"
+QUAST_INDIVIDUAL_DIR="${ROOT_DIR}/${QUAST_INDIVIDUAL_DIR}"
 QUAST_SUMMARY_DIR="${ROOT_DIR}/${QUAST_SUMMARY_DIR}"
 
 CHECKM2_DIR="${ROOT_DIR}/${CHECKM2_DIR}"
@@ -92,6 +93,7 @@ CHECKM2_SUMMARY_DIR="${ROOT_DIR}/${CHECKM2_SUMMARY_DIR}"
 QC_LOG_DIR="${ROOT_DIR}/${LOG_DIR}/assembly_qc"
 
 mkdir -p "${QUAST_DIR}"
+mkdir -p "${QUAST_INDIVIDUAL_DIR}"
 mkdir -p "${QUAST_SUMMARY_DIR}"
 mkdir -p "${CHECKM2_DIR}"
 mkdir -p "${CHECKM2_INDIVIDUAL_DIR}"
@@ -182,7 +184,7 @@ do
     ASSEMBLY_FASTA="${INPUT_FASTA_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
     require_file "${ASSEMBLY_FASTA}" "assembly fasta for ${SAMPLE_ID}"
 
-    SAMPLE_QUAST_DIR="${QUAST_DIR}/${SAMPLE_ID}"
+    SAMPLE_QUAST_DIR="${QUAST_INDIVIDUAL_DIR}/${SAMPLE_ID}"
     SAMPLE_CHECKM2_DIR="${CHECKM2_INDIVIDUAL_DIR}/${SAMPLE_ID}"
 
     SAMPLE_LOG="${QC_LOG_DIR}/${SAMPLE_ID}.assembly_qc.log"
@@ -250,6 +252,14 @@ do
 
 done < <(tail -n +2 "${SAMPLES}")
 
+# Count number of samples (excluding header)
+N_SAMPLES=$(($(wc -l < "${SAMPLES}") - 1))
+log_info "Detected ${N_SAMPLES} samples"
+
+############################################
+# MULTIQC FOR QUAST
+############################################
+
 ############################################
 # MULTIQC FOR QUAST
 ############################################
@@ -258,22 +268,41 @@ echo
 echo "[INFO] Creating QUAST summary report"
 
 QUAST_SUMMARY_REPORT="${QUAST_SUMMARY_DIR}/multiqc_quast_report.tsv"
-# RESUME LOGIC
+
+# Skip if resume and already exists
 if should_skip_global "${QUAST_SUMMARY_REPORT}"; then
     log_info "Skipping MultiQC (QUAST)"
+
+# Skip if only 1 sample
+elif [[ "${N_SAMPLES}" -lt 2 ]]; then
+    log_warn "Only one sample detected → skipping MultiQC (QUAST)"
+
 else
     log_info "Running MultiQC (QUAST)"
 
-    cd "${QUAST_DIR}"
-    conda run -n "${ENV_QUAST}" multiqc . --force --cl-config "max_table_rows: 3000" \
-    > "${QC_LOG_DIR}/multiqc_quast.stdout.log" \
-    2> "${QC_LOG_DIR}/multiqc_quast.stderr.log" || true
+    cd "${QUAST_INDIVIDUAL_DIR}"
 
-    mv multiqc_report.html multiqc_quast_report.html
-    mv multiqc_data/multiqc_quast.txt multiqc_data/multiqc_quast_report.tsv
-    sed -i 's/\.0//g' multiqc_data/multiqc_quast_report.tsv
-    cp multiqc_data/multiqc_quast_report.tsv "${QUAST_SUMMARY_DIR}/"
-    cp multiqc_quast_report.html "${QUAST_SUMMARY_DIR}/"
+    conda run -n "${ENV_QUAST}" multiqc . \
+        --force \
+        --cl-config "max_table_rows: 3000" \
+        > "${QC_LOG_DIR}/multiqc_quast.stdout.log" \
+        2> "${QC_LOG_DIR}/multiqc_quast.stderr.log" || true
+
+    # Handle outputs safely
+    if [[ -f multiqc_report.html ]]; then
+        mv multiqc_report.html multiqc_quast_report.html
+        cp multiqc_quast_report.html "${QUAST_SUMMARY_DIR}/"
+    else
+        log_warn "MultiQC HTML report not generated"
+    fi
+
+    if [[ -f multiqc_data/multiqc_quast.txt ]]; then
+        mv multiqc_data/multiqc_quast.txt multiqc_data/multiqc_quast_report.tsv
+        sed -i 's/\.0//g' multiqc_data/multiqc_quast_report.tsv
+        cp multiqc_data/multiqc_quast_report.tsv "${QUAST_SUMMARY_DIR}/"
+    else
+        log_warn "MultiQC QUAST table not generated"
+    fi
 
     cd "${ROOT_DIR}"
 fi
