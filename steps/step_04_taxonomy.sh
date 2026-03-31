@@ -273,6 +273,7 @@ echo "[3/4] skani search..."
 
 if [[ "${RESUME}" == "true" && -n "$(ls -A ${SKANI_SEARCH_DIR}/*.skani.search.tsv 2>/dev/null)" ]]; then
     log_info "Skipping skani search: results already exist"
+else
 
 tail -n +2 "${SAMPLES}" | \
 parallel --colsep '\t' -j "${SKANI_JOBS}" --halt now,fail=1 --linebuffer \
