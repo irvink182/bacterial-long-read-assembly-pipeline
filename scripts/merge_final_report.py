@@ -109,82 +109,97 @@ def parse_samples(samples_path: str | Path) -> pd.DataFrame:
     return out
 
 
-def parse_reads_qc(reads_qc_path: str | Path) -> pd.DataFrame:
-    df = read_tsv(reads_qc_path)
-    df = standardize_sample_column(df)
+def parse_reads_qc(reads_qc_dir: str | Path, samples: list[str]) -> pd.DataFrame:
+    rows = []
 
-    rename_map = {}
-    aliases = {
-        "Number of reads_fastq": "clean_read_count",
-        "Total bases_fastq": "clean_total_bases",
-        "Mean read length_fastq": "clean_mean_length",
-        "Median read length_fastq": "clean_median_length",
-        "Read length N50_fastq": "clean_read_N50",
-        "Mean read quality_fastq": "clean_mean_qscore",
+    for sample in samples:
+        f = Path(reads_qc_dir) / f"{sample}.clean.txt"
+
+        data = {
+            "Sample": sample,
+            "clean_read_count": "",
+            "clean_total_bases": "",
+            "clean_mean_length": "",
+            "clean_median_length": "",
+            "clean_read_N50": "",
+            "clean_mean_qscore": "",
+        }
+
+        if f.exists():
+            with open(f) as fh:
+                for line in fh:
+                    line = line.strip()
+
+                    if line.startswith("Number of reads:"):
+                        data["clean_read_count"] = line.split(":")[1].strip()
+
+                    elif line.startswith("Total bases:"):
+                        data["clean_total_bases"] = line.split(":")[1].strip()
+
+                    elif line.startswith("Mean read length:"):
+                        data["clean_mean_length"] = line.split(":")[1].strip()
+
+                    elif line.startswith("Median read length:"):
+                        data["clean_median_length"] = line.split(":")[1].strip()
+
+                    elif line.startswith("Read length N50:"):
+                        data["clean_read_N50"] = line.split(":")[1].strip()
+
+                    elif line.startswith("Mean read quality:"):
+                        data["clean_mean_qscore"] = line.split(":")[1].strip()
+
+        rows.append(data)
+
+    return pd.DataFrame(rows)
+
+
+def parse_quast(quast_dir: str | Path, samples: list[str]) -> pd.DataFrame:
+    rows = []
+
+    for sample in samples:
+        report = Path(quast_dir) / sample / "transposed_report.tsv"
+
+        if report.exists():
+            df = pd.read_csv(report, sep="\t")
+
+            # QUAST transposed: una fila con métricas como columnas
+            row = df.iloc[0].to_dict()
+
+            row["Sample"] = normalize_sample_name(sample)
+
+            rows.append(row)
+
+        else:
+            # muestra sin QUAST
+            rows.append({
+                "Sample": sample,
+                "assembly_size": "",
+                "contigs": "",
+                "N50": "",
+                "L50": "",
+                "GC_percent": "",
+            })
+
+    df = pd.DataFrame(rows)
+
+    # Renombrar columnas si existen
+    rename_map = {
+        "# contigs": "contigs",
+        "Total length": "assembly_size",
+        "Total length (>= 0 bp)": "assembly_size",
+        "GC (%)": "GC_percent",
+        "GC%": "GC_percent",
     }
 
-    for src, dst in aliases.items():
-        if src in df.columns:
-            rename_map[src] = dst
-
     df = df.rename(columns=rename_map)
 
-    wanted = [
-        "Sample",
-        "clean_read_count",
-        "clean_total_bases",
-        "clean_mean_length",
-        "clean_median_length",
-        "clean_read_N50",
-        "clean_mean_qscore",
-    ]
-
-    for c in wanted:
-        if c not in df.columns:
-            df[c] = ""
-
-    return df[wanted].groupby("Sample", as_index=False).agg(first_non_empty)
-
-
-def parse_quast(quast_path: str | Path) -> pd.DataFrame:
-    df = read_tsv(quast_path)
-
-    sample_col = next((c for c in ["Assembly", "Sample", "sample"] if c in df.columns), None)
-    if sample_col is None:
-        raise ValueError("Could not find sample column in QUAST summary")
-
-    df = df.rename(columns={sample_col: "Sample"})
-    df["Sample"] = df["Sample"].astype(str).map(normalize_sample_name)
-
-    rename_map = {}
-
-    if "# contigs" in df.columns:
-        rename_map["# contigs"] = "contigs"
-
-    if "Total length (>= 0 bp)" in df.columns:
-        rename_map["Total length (>= 0 bp)"] = "assembly_size"
-    elif "Total length" in df.columns:
-        rename_map["Total length"] = "assembly_size"
-
-    if "N50" in df.columns:
-        rename_map["N50"] = "N50"
-
-    if "L50" in df.columns:
-        rename_map["L50"] = "L50"
-
-    if "GC (%)" in df.columns:
-        rename_map["GC (%)"] = "GC_percent"
-    elif "GC%" in df.columns:
-        rename_map["GC%"] = "GC_percent"
-
-    df = df.rename(columns=rename_map)
-
+    # Asegurar columnas
     wanted = ["Sample", "assembly_size", "contigs", "N50", "L50", "GC_percent"]
     for c in wanted:
         if c not in df.columns:
             df[c] = ""
 
-    return df[wanted].groupby("Sample", as_index=False).agg(first_non_empty)
+    return df[wanted]
 
 def parse_checkm2(checkm2_path: str | Path) -> pd.DataFrame:
     df = read_tsv(checkm2_path)
@@ -297,24 +312,40 @@ def parse_mlst(mlst_path: str | Path) -> pd.DataFrame:
     return df.groupby("Sample", as_index=False).agg(first_non_empty)
 
 
-def parse_bakta_stats(bakta_path: str | Path) -> pd.DataFrame:
-    df = read_tsv(bakta_path)
-    df = standardize_sample_column(df)
+def parse_bakta_stats(bakta_dir: str | Path, samples: list[str]) -> pd.DataFrame:
+    rows = []
 
-    rename_map = {
-        "CDSs": "bakta_cds",
-        "tRNAs": "bakta_tRNA",
-        "rRNAs": "bakta_rRNA",
-        "pseudogenes": "bakta_pseudogenes",
-    }
-    df = df.rename(columns=rename_map)
+    for sample in samples:
+        f = Path(bakta_dir) / f"{sample}.txt"
 
-    wanted = ["Sample", "bakta_cds", "bakta_tRNA", "bakta_rRNA", "bakta_pseudogenes"]
-    for c in wanted:
-        if c not in df.columns:
-            df[c] = ""
+        data = {
+            "Sample": sample,
+            "bakta_cds": "",
+            "bakta_tRNA": "",
+            "bakta_rRNA": "",
+            "bakta_pseudogenes": "",
+        }
 
-    return df[wanted].groupby("Sample", as_index=False).agg(first_non_empty)
+        if f.exists():
+            with open(f) as fh:
+                for line in fh:
+                    line = line.strip()
+
+                    if line.startswith("CDSs:"):
+                        data["bakta_cds"] = line.split(":")[1].strip()
+
+                    elif line.startswith("tRNAs:"):
+                        data["bakta_tRNA"] = line.split(":")[1].strip()
+
+                    elif line.startswith("rRNAs:"):
+                        data["bakta_rRNA"] = line.split(":")[1].strip()
+
+                    elif line.startswith("pseudogenes:"):
+                        data["bakta_pseudogenes"] = line.split(":")[1].strip()
+
+        rows.append(data)
+
+    return pd.DataFrame(rows)
 
 
 def parse_amrfinder(amr_combined_path: str | Path) -> pd.DataFrame:
@@ -436,13 +467,19 @@ def add_input_presence_flag(df: pd.DataFrame, col: str, flag_name: str) -> pd.Da
         df[flag_name] = False
         return df
 
+    series = df[col]
+
+    # 🔥 FIX: si es DataFrame (columnas duplicadas), coger la primera
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+
     df[flag_name] = (
-        df[col]
-        .astype(str)
+        series.astype(str)
         .str.strip()
         .replace({"": pd.NA, "NA": pd.NA, "None": pd.NA, "nan": pd.NA})
         .notna()
     )
+
     return df
 
 def main() -> None:
@@ -462,12 +499,13 @@ def main() -> None:
     args = ap.parse_args()
 
     samples = parse_samples(args.samples)
-    reads_qc = parse_reads_qc(args.reads_qc)
-    quast = parse_quast(args.quast)
+    sample_list = samples["Sample"].tolist()
+    reads_qc = parse_reads_qc(args.reads_qc, sample_list)
+    quast = parse_quast(args.quast, sample_list)
     checkm2 = parse_checkm2(args.checkm2)
     taxonomy = parse_taxonomy(args.taxonomy)
     mlst = parse_mlst(args.mlst)
-    bakta = parse_bakta_stats(args.bakta)
+    bakta = parse_bakta_stats(args.bakta, sample_list)
     amr = parse_amrfinder(args.amr)
     plasmidfinder = parse_plasmidfinder(args.plasmidfinder)
     mobtyper = parse_mobtyper(args.mobtyper)
@@ -475,6 +513,7 @@ def main() -> None:
     df = samples.copy()
     for part in [reads_qc, quast, checkm2, taxonomy, mlst, bakta, amr, plasmidfinder, mobtyper]:
         df = df.merge(part, on="Sample", how="left")
+        df = df.loc[:, ~df.columns.duplicated()]
         df = add_input_presence_flag(df, "assembly_size", "has_quast")
         df = add_input_presence_flag(df, "checkm2_completeness", "has_checkm2")
         df = add_input_presence_flag(df, "final_species", "has_taxonomy")
