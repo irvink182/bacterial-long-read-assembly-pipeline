@@ -7,6 +7,32 @@ from typing import Iterable
 
 import pandas as pd
 
+def find_file_for_sample(sample: str, directory: Path, pattern: str = "*.txt") -> Path | None:
+    directory = Path(directory)
+
+    if not directory.exists():
+        return None
+    """
+    Find file for a given sample using flexible matching.
+
+    Parameters:
+        sample: normalized sample name
+        directory: directory containing files
+        pattern: glob pattern
+
+    Returns:
+        Path or None
+    """
+    files = list(directory.glob(pattern))
+
+    for f in files:
+        name = f.name
+
+        # match flexible: sample must be in filename
+        if sample in name:
+            return f
+
+    return None
 
 def read_tsv(path: str | Path) -> pd.DataFrame:
     return pd.read_csv(path, sep="\t", dtype=str).fillna("")
@@ -113,7 +139,7 @@ def parse_reads_qc(reads_qc_dir: str | Path, samples: list[str]) -> pd.DataFrame
     rows = []
 
     for sample in samples:
-        f = Path(reads_qc_dir) / f"{sample}.clean.txt"
+        f = find_file_for_sample(sample, reads_qc_dir, "*.txt")
 
         data = {
             "Sample": sample,
@@ -125,7 +151,7 @@ def parse_reads_qc(reads_qc_dir: str | Path, samples: list[str]) -> pd.DataFrame
             "clean_mean_qscore": "",
         }
 
-        if f.exists():
+        if f is not None and f.exists():
             with open(f) as fh:
                 for line in fh:
                     line = line.strip()
@@ -147,6 +173,9 @@ def parse_reads_qc(reads_qc_dir: str | Path, samples: list[str]) -> pd.DataFrame
 
                     elif line.startswith("Mean read quality:"):
                         data["clean_mean_qscore"] = line.split(":")[1].strip()
+
+        else:
+            print (f"[WARN] No Nanostats file found for sample {sample}")
 
         rows.append(data)
 
@@ -313,10 +342,11 @@ def parse_mlst(mlst_path: str | Path) -> pd.DataFrame:
 
 
 def parse_bakta_stats(bakta_dir: str | Path, samples: list[str]) -> pd.DataFrame:
+    bakta_dir = Path(bakta_dir)
     rows = []
 
     for sample in samples:
-        f = Path(bakta_dir) / f"{sample}.txt"
+        f = bakta_dir / sample / f"{sample}.txt"
 
         data = {
             "Sample": sample,
@@ -342,6 +372,8 @@ def parse_bakta_stats(bakta_dir: str | Path, samples: list[str]) -> pd.DataFrame
 
                     elif line.startswith("pseudogenes:"):
                         data["bakta_pseudogenes"] = line.split(":")[1].strip()
+        else:
+            print(f"[WARN] Bakta file not found: {f}")
 
         rows.append(data)
 
@@ -482,6 +514,31 @@ def add_input_presence_flag(df: pd.DataFrame, col: str, flag_name: str) -> pd.Da
 
     return df
 
+def clean_numeric(val):
+    """
+    Normalize numeric values:
+    - remove commas
+    - convert to int or float
+    """
+    if pd.isna(val):
+        return pd.NA
+
+    val = str(val).strip()
+
+    if val == "" or val.lower() in ["na", "none"]:
+        return pd.NA
+
+    # remove thousands separators
+    val = val.replace(",", "")
+
+    try:
+        if "." in val:
+            return float(val)
+        else:
+            return int(val)
+    except ValueError:
+        return pd.NA
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--samples", required=True)
@@ -576,26 +633,65 @@ def main() -> None:
         "has_plasmidfinder",
         "has_mobtyper",
     ]
+    
+    numeric_cols = [
+        "expected_genome_size",
+        "clean_read_count",
+        "clean_total_bases",
+        "clean_mean_length",
+        "clean_median_length",
+        "clean_read_N50",
+        "clean_mean_qscore",
+        "assembly_size",
+        "contigs",
+        "N50",
+        "L50",
+        "GC_percent",
+        "checkm2_completeness",
+        "checkm2_contamination",
+        "ANI",
+        "confidence_overall",
+        "mlst_ST",
+        "bakta_cds",
+        "bakta_tRNA",
+        "bakta_rRNA",
+        "bakta_pseudogenes",
+        "amr_gene_count",
+        "virulence_gene_count",
+        "stress_gene_count",
+        "plasmidfinder_hits",
+        "plasmidfinder_replicons",
+    ]
 
+    # --- Normalize numeric values ---
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(clean_numeric)
+
+    # Convert types AFTER cleaning
+    df[numeric_cols] = df[numeric_cols].convert_dtypes()
+
+    # Ensure all columns exist
     for c in final_cols:
         if c not in df.columns:
             df[c] = ""
 
     df = df[final_cols].copy()
 
-    # reemplazar celdad vacias por NA
+    # Replace empty strings with NA
     df = df.replace("", pd.NA)
-    df = df.fillna("NA")
 
+    # --- EXPORT ---
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_path, sep="\t", index=False)
+
+    # 🔥 IMPORTANTE: usar na_rep aquí, NO fillna antes
+    df.to_csv(out_path, sep="\t", index=False, na_rep="NA")
 
     if args.out_xlsx:
         xlsx_path = Path(args.out_xlsx)
         xlsx_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_excel(xlsx_path, index=False)
-
 
 if __name__ == "__main__":
     main()
