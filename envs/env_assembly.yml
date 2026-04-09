@@ -12,4 +12,7 @@ dependencies:
   - pypolca
   - samtools
   - seqkit
+  - mmseqs2
+  - mosdepth
+  - dnaapler
   - python=3.10

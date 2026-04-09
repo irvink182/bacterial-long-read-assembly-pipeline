@@ -22,6 +22,10 @@ UTILS_FILE="${ROOT_DIR}/scripts/utils.sh"
 STEP=""
 SAMPLES=""
 TRIMMER_OVERRIDE=""
+FILTER_CONTIGS="true"
+RUN_DNAAPLER="true"
+GENERATE_CONTIG_STATS="true"
+MIN_COV_FACTOR="0.3"
 RESUME="false"
 FORCE="false"
 
@@ -42,6 +46,10 @@ usage() {
     echo
     echo "Optional overrides:"
     echo "  --trimmer fastplong|porechop_filtlong"
+    echo "  --no-filter-contigs     Disable contig filtering"
+    echo "  --no-dnaapler           Disable dnaapler reorientation"
+    echo "  --no-contig-stats       Disable contig stats generation"
+    echo "  --min-cov-factor FLOAT  Coverage threshold factor (default: 0.2)"
     exit 1
 }
 
@@ -57,6 +65,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --trimmer)
             TRIMMER_OVERRIDE="$2"
+            shift 2
+            ;;
+        --no-filter-contigs)
+            FILTER_CONTIGS="false"
+            shift
+            ;;
+        --no-dnaapler)
+            RUN_DNAAPLER="false"
+            shift
+            ;;
+        --no-contig-stats)
+            GENERATE_CONTIG_STATS="false"
+            shift
+            ;;
+        --min-cov-factor)
+            MIN_COV_FACTOR="$2"
             shift 2
             ;;
         --resume)
@@ -77,6 +101,10 @@ done
 
 source "${CONFIG_FILE}"
 source "${DB_FILE}"
+export FILTER_CONTIGS
+export RUN_DNAAPLER
+export GENERATE_CONTIG_STATS
+export MIN_COV_FACTOR
 export RESUME
 export FORCE
 

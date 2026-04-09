@@ -1,4 +1,4 @@
-# Bacterial WGS long-read / hybrid pipeline (v1.1)
+# Bacterial WGS long-read / hybrid pipeline (v1.2)
 A modular pipeline for bacterial genome assembly and genomic characterization using long-read sequencing data, with optional short-read polishing for hybrid workflows.
 
 ## Overview
@@ -6,6 +6,7 @@ This pipeline processes bacterial sequencing data from raw reads to a final inte
 
 - Sequencing reads QC
 - Assembly
+- Assembly reorientation (if possible)
 - Assembly QC
 - Taxonomy
 - Annotation
@@ -35,6 +36,7 @@ long reads
   -> Trimming (porechop + filtlong or fastplong) / read QC
   -> Flye
   -> Medaka
+  -> Assembly reorientation (dnaapler)
   -> Assembly QC (quast & CheckM2)
   -> Taxonomy (Sylph, Sourmash & skani)
   -> Annotation (Bakta)
@@ -47,6 +49,7 @@ long reads + short reads
   -> Trimming (porechop + filtlong or fastplong) / read QC
   -> Flye
   -> Medaka
+  -> Assembly reorientation (dnaapler)
   -> pypolca (for short-read polishing)
   -> Assembly QC (quast & CheckM2)
   -> Taxonomy (Sylph, Sourmash & skani)
@@ -85,6 +88,7 @@ Project/
 │   ├── abundance_species_plot.R
 │   ├── amrfinder_presence_absence_by_type.py
 │   ├── amrfinder_unique_symbols_by_type_and_class.py
+│   ├── generate_contigs_stats.py
 │   ├── merge_final_report.py
 │   ├── merge_taxonomy_reports.py
 │   ├── plot_amrfinder_heatmap_amr_virulence.py
@@ -219,6 +223,8 @@ Long-read preprocessing:
 Assembly and polishing:
 - long-read assembly with `Flye`
 - ONT correction with `Medaka`
+- Assembly reorientation `dnaapler`
+- generate contig stats
 - optional short-read polishing with `pypolca` when `asm_type=hybrid`
 - Final assembly FASTA file
 
@@ -274,15 +280,15 @@ The pipeline uses a tab-delimited samplesheet (for example, a `.tsv` extension) 
 ### Example samplesheet
 | Sample_ID | asm_type | expected_genome_size | long_reads | short_r1 | short_r2 |
 |---|---|---:|---|---|---|
-| EPI00579 | hybrid | 5000000 | EPI00579.fastq.gz | EPI00579.R1.clean.fastq.gz | EPI00579.R2.clean.fastq.gz |
-| EPI00580 | long | 5100000 | EPI00580.fastq.gz | NA | NA |
+| sample1 | hybrid | 5000000 | sample1.fastq.gz | sample1.R1.clean.fastq.gz | sample1.R2.clean.fastq.gz |
+| Sample_2 | long | 5100000 | Sample_2.fastq.gz | NA | NA |
 
 Example as TSV:
 
 ```tsv
 Sample_ID	asm_type	expected_genome_size	long_reads	short_r1	short_r2
-EPI00579	hybrid	5000000	EPI00579.fastq.gz	EPI00579.R1.clean.fastq.gz	EPI00579.R2.clean.fastq.gz
-EPI00580	long	5100000	EPI00580.fastq.gz	NA	NA
+sample1	hybrid	5000000	sample1.fastq.gz	sample1.R1.clean.fastq.gz	sample1.R2.clean.fastq.gz
+Sample_2	long	5100000	Sample_2.fastq.gz	NA	NA
 ```
 
 ## Expected outputs
@@ -290,7 +296,7 @@ EPI00580	long	5100000	EPI00580.fastq.gz	NA	NA
 Main output directories are written to `results/`:
 
 - `results/reads/`: cleaned reads (fastq files) and read QC tables
-- `results/assemblies/`: Final assembly files (`Medaka` or polished `pypolca`)
+- `results/assemblies/`: Final assembly files (`Medaka` or polished `pypolca`), and contig stats
 - `results/quality_check/`: QUAST and CheckM2 results
 - `results/taxonomy/`: taxonomic assignment outputs
 - `results/annotation/`: Bakta annotations
@@ -310,6 +316,7 @@ Main output directories are written to `results/`:
 ### Assembly and polishing
 - [Flye](https://github.com/mikolmogorov/Flye)
 - [Medaka](https://github.com/nanoporetech/medaka)
+- [dnaapler](https://github.com/gbouras13/dnaapler)
 - [pypolca](https://github.com/gbouras13/pypolca)
 
 ### Assembly QC
