@@ -96,6 +96,7 @@ FILTLONG_QC_DIR="${RESULTS_DIR}/reads/qc/filtlong"
 # Assemblies
 FLYE_DIR="${RESULTS_DIR}/assemblies/flye_asm"
 MEDAKA_DIR="${RESULTS_DIR}/assemblies/medaka_asm"
+COVERAGE_DIR="${RESULTS_DIR}/assemblies/coverage_asm"
 
 ############################################
 # FUNCTIONS
@@ -153,6 +154,23 @@ cleanup_assemblies() {
     remove_path "${MEDAKA_DIR}"
 }
 
+cleanup_coverage_assemblies() {
+    log_info "Cleaning assembly coverage intermediate files"
+
+    find "${COVERAGE_DIR}" -type f \
+        \( -name "*.mosdepth.*" -o -name "*.bed.gz*" \) 2>/dev/null | while read -r file; do
+
+        if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[DRY-RUN] Would remove: ${file}"
+        else
+            echo "[INFO] Removing: ${file}"
+            rm -f "${file}"
+        fi
+
+    done     
+
+}
+
 cleanup_plasmidfinder_tmp() {
     log_info "Cleaning plasmidfinder tmp directories"
 
@@ -183,6 +201,7 @@ echo "=================================================="
 
 cleanup_reads_by_trimmer
 cleanup_assemblies
+cleanup_coverage_assemblies
 cleanup_plasmidfinder_tmp
 
 echo "[INFO] Cleanup completed"
