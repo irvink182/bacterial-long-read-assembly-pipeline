@@ -298,7 +298,7 @@ ENV_CHARACTERIZATION="${ENV_CHARACTERIZATION:-env_characterization}"
 #ENV_MOBSUITE="${ENV_MOBSUITE:-mob_suite}"
 #ENV_PLASMIDFINDER="${ENV_PLASMIDFINDER:-epitools}"
 
-ENV_ANALYSIS="${ENV_ANALYSIS:-python_r_utils_env}"
+ENV_ANALYSIS="${ENV_ANALYSIS:-env_analysis}"
 
 #### Helper scripts
 RSCRIPT_PLOT="${RSCRIPT_PLOT:-scripts/abundance_species_plot.R}"
