@@ -138,6 +138,70 @@ abs_path() {
     fi
 }
 
+# ------------------------------------------------------------
+# Empty files check (low input files)
+# ------------------------------------------------------------
+
+check_file_not_empty() {
+    local file="$1"
+
+    if [[ ! -s "$file" ]]; then
+        log_warn "File is empty or missing: $file"
+        return 1
+    fi
+
+    return 0
+}
+
+
+# ------------------------------------------------------------
+# check FASTQ files (low number of reads)
+# ------------------------------------------------------------
+
+check_min_reads() {
+    local fastq="$1"
+    local min_reads="$2"
+
+    local count
+    count=$(grep -c "^+$" "$fastq" 2>/dev/null || echo 0)
+
+    if [[ "$count" -lt "$min_reads" ]]; then
+        log_warn "Low read count: $count (< $min_reads)"
+        return 1
+    fi
+
+    return 0
+}
+
+
+# ------------------------------------------------------------
+# Safe run, run the pipeline everytime
+# ------------------------------------------------------------
+
+run_safe() {
+    local step_name="$1"
+    shift
+
+    if ! "$@"; then
+        log_warn "Step failed: ${step_name}"
+        return 1
+    fi
+
+    return 0
+}
+
+
+# ------------------------------------------------------------
+# Skip failed or empty file
+# ------------------------------------------------------------
+
+skip_sample() {
+    local reason="$1"
+
+    log_warn "Skipping sample: $reason"
+    return 1
+}
+
 # ==========================================
 # Resume / skip utilities
 # ==========================================

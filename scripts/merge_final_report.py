@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+import re
 
 def find_file_for_sample(sample: str, directory: Path, pattern: str = "*.txt") -> Path | None:
     directory = Path(directory)
@@ -37,45 +38,57 @@ def find_file_for_sample(sample: str, directory: Path, pattern: str = "*.txt") -
 def read_tsv(path: str | Path) -> pd.DataFrame:
     return pd.read_csv(path, sep="\t", dtype=str).fillna("")
 
+def normalize_sample_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Standardize sample column name to 'Sample' across different tools.
+    """
 
-def normalize_sample_col(df: pd.DataFrame) -> pd.DataFrame:
-    for col in ["Sample", "sample", "Sample_ID", "sample_id"]:
-        if col in df.columns:
-            return df.rename(columns={col: "Sample"})
-    raise ValueError("No sample column found. Expected one of: Sample, sample, Sample_ID, sample_id")
+    # Clean headers
+    df.columns = df.columns.str.strip()
 
+    # Column names candidates
+    candidates = ["Sample", "sample", "SAMPLE", "name", "Name", "sample_ID", "sampleID", "Sample_id", "sample_id", "id"]
+
+    for c in candidates:
+        if c in df.columns:
+            df = df.rename(columns={c: "Sample"})
+            break
+
+    if "Sample" not in df.columns:
+        raise ValueError(f"Could not find sample column in: {df.columns.tolist()}")
+
+    # Clean values
+    df["Sample"] = df["Sample"].astype(str).str.strip()
+
+    # optional: remove typic extension files
+    df["Sample"] = df["Sample"].str.replace(".fasta", "", regex=False)
+    df["Sample"] = df["Sample"].str.replace(".fa", "", regex=False)
+    df["Sample"] = df["Sample"].str.replace(".fastq", "", regex=False)
+
+    return df
 
 def normalize_sample_name(sample: str) -> str:
     if not isinstance(sample, str):
         return ""
+
     sample = sample.strip()
 
-    # sufijos frecuentes de lecturas
-    for suffix in [".fastplong", ".porechop_filtlong", ".clean", ".fastq.gz", ".fastq", ".fq.gz", ".fq"]:
-        if sample.endswith(suffix):
-            sample = sample[: -len(suffix)]
+    # remove extensions
+    sample = re.sub(r"\.(fastq|fq|fasta|fa)(\.gz)?$", "", sample)
 
-    # casos encadenados
-    for token in [".fastplong.clean", ".porechop_filtlong.clean"]:
-        if token in sample:
-            sample = sample.split(token)[0]
+    # common suffixes
+    sample = re.sub(r"\.(fastplong|porechop_filtlong|clean)$", "", sample)
 
-    # sufijos tipo contig
-    sample = sample.replace(".fa", "").replace(".fasta", "")
-    sample = sample.replace(".assembly", "")
-    sample = sample.replace(".contigs", "")
-    sample = sample.strip()
+    # clean reads
+    sample = re.sub(r"\.(fastplong\.clean|porechop_filtlong\.clean)$", "", sample)
 
-    return sample
+    # assemblies/contigs
+    sample = re.sub(r"\.(assembly|contigs)$", "", sample)
 
+    return sample.strip()
 
-def standardize_sample_column(df: pd.DataFrame) -> pd.DataFrame:
-    df = normalize_sample_col(df)
-    df["Sample"] = df["Sample"].astype(str).map(normalize_sample_name)
-    df["Sample"] = df["Sample"].str.replace(r"_contig_\d+$", "", regex=True)
-    df["Sample"] = df["Sample"].str.strip()
-    return df
-
+def normalize_sample_series(series: pd.Series) -> pd.Series:
+    return series.apply(normalize_sample_name)
 
 def first_non_empty(series: pd.Series) -> str:
     for x in series:
@@ -84,6 +97,13 @@ def first_non_empty(series: pd.Series) -> str:
             return s
     return ""
 
+def count_semicolon_items(x):
+    x = str(x).strip().lower()
+
+    if x in {"", "none", "nan"}:
+        return 0
+
+    return len([i for i in x.split(";") if i.strip()])
 
 def split_unique_join(values: Iterable[str], sep: str = ";") -> str:
     items: list[str] = []
@@ -104,18 +124,9 @@ def split_unique_join(values: Iterable[str], sep: str = ";") -> str:
     return ";".join(items)
 
 
-def count_semicolon_items(value: str) -> int:
-    if not isinstance(value, str):
-        return 0
-    value = value.strip()
-    if not value or value == "-" or value.lower() == "nan":
-        return 0
-    return len([x for x in value.split(";") if x.strip()])
-
-
 def parse_samples(samples_path: str | Path) -> pd.DataFrame:
     df = read_tsv(samples_path)
-    df = standardize_sample_column(df)
+    df = normalize_sample_column(df)
 
     rename_map = {}
     if "asm_type" not in df.columns and "ASM_TYPE" in df.columns:
@@ -232,7 +243,7 @@ def parse_quast(quast_dir: str | Path, samples: list[str]) -> pd.DataFrame:
 
 def parse_checkm2(checkm2_path: str | Path) -> pd.DataFrame:
     df = read_tsv(checkm2_path)
-    df = standardize_sample_column(df)
+    df = normalize_sample_column(df)
 
     rename_map = {}
     for src, dst in {
@@ -256,7 +267,7 @@ def parse_checkm2(checkm2_path: str | Path) -> pd.DataFrame:
 
 def parse_taxonomy(taxonomy_path: str | Path) -> pd.DataFrame:
     df = read_tsv(taxonomy_path)
-    df = standardize_sample_column(df)
+    df = normalize_sample_column(df)
 
     # elimina posibles filas repetidas de header incrustadas
     df = df[df["Sample"].astype(str).str.strip().ne("Sample")].copy()
@@ -284,11 +295,8 @@ def parse_taxonomy(taxonomy_path: str | Path) -> pd.DataFrame:
             "sourmash_ani_est",
             "sylph_adjusted_ani",
         ],
-        "confidence_overall": [
-            "confidence_overall",
-            "Confidence_overall",
-            "overall_confidence",
-            "overall_label",
+        "overall_score": [
+            "overall_score",
             "overall_score",
         ],
         "skani_species": ["skani_species"],
@@ -382,6 +390,7 @@ def parse_bakta_stats(bakta_dir: str | Path, samples: list[str]) -> pd.DataFrame
 
 def parse_amrfinder(amr_combined_path: str | Path) -> pd.DataFrame:
     df = read_tsv(amr_combined_path)
+    df = normalize_sample_column(df)
 
     sample_col = next((c for c in ["Sample", "sample", "name", "Name"] if c in df.columns), None)
     if sample_col is None:
@@ -413,30 +422,51 @@ def parse_amrfinder(amr_combined_path: str | Path) -> pd.DataFrame:
 
     return out
 
-
 def parse_plasmidfinder(plasmidfinder_summary_path: str | Path) -> pd.DataFrame:
     df = read_tsv(plasmidfinder_summary_path)
-    df = standardize_sample_column(df)
+    df = normalize_sample_column(df)
 
+    # --- detect replicon column ---
     inc_col = "inc_types" if "inc_types" in df.columns else None
+
     if inc_col is None:
         possible = [c for c in df.columns if "inc" in c.lower()]
         inc_col = possible[0] if possible else None
 
+    if inc_col is None:
+        print("[WARN] No plasmid replicon column found")
+        df["plasmidfinder_replicons"] = df["plasmidfinder_replicons"].fillna("none")
+    else:
+        df["plasmidfinder_replicons"] = (
+            df[inc_col]
+            .astype(str)
+            .str.strip()
+            .replace({"": "none", "nan": "none"})
+        )
+
+    # --- compute metrics ---
     out = pd.DataFrame({"Sample": df["Sample"]})
-    out["plasmidfinder_replicons"] = df[inc_col] if inc_col else ""
+
+    out["plasmidfinder_replicons"] = df["plasmidfinder_replicons"]
     out["plasmidfinder_hits"] = out["plasmidfinder_replicons"].apply(count_semicolon_items)
     out["plasmidfinder_has_plasmid"] = out["plasmidfinder_hits"].gt(0)
 
-    return out.groupby("Sample", as_index=False).agg({
-        "plasmidfinder_replicons": split_unique_join,
-        "plasmidfinder_hits": "max",
-        "plasmidfinder_has_plasmid": "max",
+    agg_df = out.groupby("Sample", as_index=False).agg({
+    "plasmidfinder_replicons": split_unique_join,
+    "plasmidfinder_hits": "max",
+    "plasmidfinder_has_plasmid": "max",
     })
 
+    # 🔥 FIX CLAVE
+    agg_df["plasmidfinder_replicons"] = (
+        agg_df["plasmidfinder_replicons"]
+        .replace("", "none")
+        )
+    return agg_df
 
 def parse_mobtyper(mobtyper_combined_path: str | Path) -> pd.DataFrame:
     df = read_tsv(mobtyper_combined_path)
+    df = normalize_sample_column(df)
 
     sample_col = next((c for c in ["sample_id", "Sample", "sample"] if c in df.columns), None)
     if sample_col is None:
@@ -501,7 +531,6 @@ def add_input_presence_flag(df: pd.DataFrame, col: str, flag_name: str) -> pd.Da
 
     series = df[col]
 
-    # 🔥 FIX: si es DataFrame (columnas duplicadas), coger la primera
     if isinstance(series, pd.DataFrame):
         series = series.iloc[:, 0]
 
@@ -556,7 +585,10 @@ def main() -> None:
     args = ap.parse_args()
 
     samples = parse_samples(args.samples)
+
+    samples["Sample"] = normalize_sample_series(samples["Sample"])
     sample_list = samples["Sample"].tolist()
+
     reads_qc = parse_reads_qc(args.reads_qc, sample_list)
     quast = parse_quast(args.quast, sample_list)
     checkm2 = parse_checkm2(args.checkm2)
@@ -566,6 +598,21 @@ def main() -> None:
     amr = parse_amrfinder(args.amr)
     plasmidfinder = parse_plasmidfinder(args.plasmidfinder)
     mobtyper = parse_mobtyper(args.mobtyper)
+
+    for name, df_part in [ 
+    ("reads_qc", reads_qc), 
+    ("quast", quast), 
+    ("checkm2", checkm2), 
+    ("taxonomy", taxonomy), 
+    ("mlst", mlst), 
+    ("bakta", bakta), ("amr", amr), 
+    ("plasmidfinder", plasmidfinder), 
+    ("mobtyper", mobtyper)
+    ]:
+        if "Sample" in df_part.columns:
+            df_part["Sample"] = normalize_sample_series(df_part["Sample"])
+        else:
+            print(f"[WARN] No Sample column in {name}")
 
     df = samples.copy()
     for part in [reads_qc, quast, checkm2, taxonomy, mlst, bakta, amr, plasmidfinder, mobtyper]:
@@ -603,7 +650,7 @@ def main() -> None:
         "final_species",
         "final_genus",
         "ANI",
-        "confidence_overall",
+        "overall_score",
         "skani_species",
         "sourmash_species",
         "mlst_scheme",
@@ -650,7 +697,7 @@ def main() -> None:
         "checkm2_completeness",
         "checkm2_contamination",
         "ANI",
-        "confidence_overall",
+        "overall_score",
         "mlst_ST",
         "bakta_cds",
         "bakta_tRNA",
@@ -660,7 +707,6 @@ def main() -> None:
         "virulence_gene_count",
         "stress_gene_count",
         "plasmidfinder_hits",
-        "plasmidfinder_replicons",
     ]
 
     # --- Normalize numeric values ---
@@ -685,7 +731,7 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 🔥 IMPORTANTE: usar na_rep aquí, NO fillna antes
+    # na_rep
     df.to_csv(out_path, sep="\t", index=False, na_rep="NA")
 
     if args.out_xlsx:

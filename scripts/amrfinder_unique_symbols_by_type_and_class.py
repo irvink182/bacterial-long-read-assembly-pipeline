@@ -7,6 +7,36 @@ def uniq_join(series: pd.Series) -> str:
     vals = [x for x in series.dropna().astype(str) if x and x.lower() != "nan"]
     return ";".join(sorted(set(vals)))
 
+def resolve_amrfinder_columns(df):
+    # SAMPLE/NAME
+    if "Name" in df.columns:
+        sample_col = "Name"
+    elif "Sample" in df.columns:
+        sample_col = "Sample"
+    else:
+        raise ValueError("Missing sample column (Name/Sample)")
+
+    # GENE/ELEMENT
+    if "Element symbol" in df.columns:
+        gene_col = "Element symbol"
+    elif "Gene symbol" in df.columns:
+        gene_col = "Gene symbol"
+    else:
+        raise ValueError("Missing gene column (Element symbol / Gene symbol)")
+
+    # TYPE/ELEMENT TYPE
+    if "Type" in df.columns:
+        type_col = "Type"
+    elif "Element type" in df.columns:
+        type_col = "Element type"
+    else:
+        raise ValueError("Missing type column (Type / Element type)")
+
+    # CLASS
+    class_col = "Class" if "Class" in df.columns else None
+
+    return sample_col, gene_col, type_col, class_col
+
 def main():
     ap = argparse.ArgumentParser(
         description="Summarize AMRFinder results using UNIQUE Element symbols, split by Type and/or Class."
@@ -25,6 +55,7 @@ def main():
 
     args = ap.parse_args()
 
+    # Load dataframe
     df = pd.read_csv(args.input, sep="\t", dtype=str)
 
     # Remove duplicated header row(s)
@@ -35,20 +66,23 @@ def main():
     for c in df.columns:
         df[c] = df[c].astype(str).str.strip()
 
-    # Normalize NA
-    for c in ["Type", "Class", "Element symbol"]:
-        if c in df.columns:
-            df[c] = df[c].replace({"nan": np.nan, "": np.nan})
+    # Resolve columns names
+    sample_col, gene_col, type_col, class_col = resolve_amrfinder_columns(df)
 
-    # Keep rows with Element symbol
-    if "Element symbol" not in df.columns or "Name" not in df.columns:
-        raise SystemExit("Missing required columns: Name and/or Element symbol")
+    print(f"[INFO] Using columns: sample={sample_col}, gene={gene_col}, type={type_col}")
 
-    df = df[df["Element symbol"].notna()].copy()
+    # Normalize missing values
+    df[gene_col] = df[gene_col].replace({"nan": np.nan, "": np.nan})
+    df = df[df[gene_col].notna()].copy()
+
+    if df.empty:
+        print("Empty AMRFinder input")
+        pd.DataFrame(columns=["sample"]).to_csv(args.output, sep="\t", index=False)
+        return
 
     # ---- Total unique symbols per sample ----
     total_symbols = (
-        df.groupby("Name")["Element symbol"]
+        df.groupby(sample_col)[gene_col]
         .nunique()
         .rename("total_unique_element_symbols")
     )
@@ -57,34 +91,34 @@ def main():
 
     # ---- Unique symbol counts per Type ----
     type_counts = None
-    if args.include_type_counts and "Type" in df.columns:
+    if args.include_type_counts:
         type_counts = (
-            df.groupby(["Name", "Type"])["Element symbol"]
+            df.groupby([sample_col, type_col])[gene_col]
             .nunique()
             .unstack(fill_value=0)
         )
-        type_counts.columns = [f"n_unique_symbols_type__{c}" for c in type_counts.columns.astype(str)]
+        type_counts.columns = [f"n_unique_symbols_type__{c}" for c in type_counts.columns]
         out_parts.append(type_counts)
 
     # ---- Unique symbol counts per Class ----
     class_counts = None
-    if args.include_class_counts and "Class" in df.columns:
+    if args.include_class_counts and class_col:
         class_counts = (
-            df.groupby(["Name", "Class"])["Element symbol"]
+            df.groupby([sample_col, class_col])[gene_col]
             .nunique()
             .unstack(fill_value=0)
         )
-        class_counts.columns = [f"n_unique_symbols_class__{c}" for c in class_counts.columns.astype(str)]
+        class_counts.columns = [f"n_unique_symbols_class__{c}" for c in class_counts.columns]
         out_parts.append(class_counts)
 
     # ---- Lists per Type ----
-    if args.include_type_lists and "Type" in df.columns:
+    if args.include_type_lists:
         type_lists = (
-            df.groupby(["Name", "Type"])["Element symbol"]
+            df.groupby([sample_col, type_col])[gene_col]
             .apply(uniq_join)
             .unstack(fill_value="")
         )
-        type_lists.columns = [f"element_symbols__{c}" for c in type_lists.columns.astype(str)]
+        type_lists.columns = [f"element_symbols__{c}" for c in type_lists.columns]
 
         # Fill empty with "none" where corresponding count == 0
         if type_counts is not None:
@@ -101,13 +135,13 @@ def main():
         out_parts.append(type_lists)
 
     # ---- Lists per Class ----
-    if args.include_class_lists and "Class" in df.columns:
+    if args.include_class_lists and class_col:
         class_lists = (
-            df.groupby(["Name", "Class"])["Element symbol"]
+            df.groupby([sample_col, class_col])[gene_col]
             .apply(uniq_join)
             .unstack(fill_value="")
         )
-        class_lists.columns = [f"element_symbols_class__{c}" for c in class_lists.columns.astype(str)]
+        class_lists.columns = [f"element_symbols_class__{c}" for c in class_lists.columns]
 
         # Fill empty with "none" where corresponding count == 0
         if class_counts is not None:
@@ -125,7 +159,7 @@ def main():
     summary = (
         pd.concat(out_parts, axis=1)
         .reset_index()
-        .rename(columns={"Name": "sample"})
+        .rename(columns={sample_col: "sample"})
     )
 
     summary.to_csv(args.output, sep="\t", index=False)

@@ -378,8 +378,8 @@ conda run --no-capture-output -n "${ENV_ANALYSIS}" python3 "${SCRIPT_MATRIX}" \
 echo "[INFO] Step E: heatmap AMR+VIRULENCE (PNG+SVG)"
 
 conda run --no-capture-output -n "${ENV_ANALYSIS}" python3 "${SCRIPT_HEATMAP}" \
-    --amr "${AMRFINDER_SUMMARY_DIR}/amrfinder.AMR.presence_absence.tsv" \
-    --virulence "${AMRFINDER_SUMMARY_DIR}/amrfinder.VIRULENCE.presence_absence.tsv" \
+    --amr "${AMRFINDER_SUMMARY_DIR}/amrfinder.AMR.tsv" \
+    --virulence "${AMRFINDER_SUMMARY_DIR}/amrfinder.VIRULENCE.tsv" \
     --top-amr 30 \
     --top-vir 30 \
     --order alphabetical \

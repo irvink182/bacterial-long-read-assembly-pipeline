@@ -286,10 +286,10 @@ MOBSUITE_THREADS="${MOBSUITE_THREADS:-12}"
 
 #### Main environments
 ENV_TRIMMING="${ENV_TRIMMING:-env_trim_longreads}"
-ENV_SYLPH="${ENV_SYLPH:-sylph}"
+ENV_SYLPH="${ENV_SYLPH:-env_sylph}"
 ENV_ASSEMBLY="${ENV_ASSEMBLY:-env_assembly}"
 ENV_QUAST="${ENV_QUAST:-env_quast}"
-ENV_CHECKM2="${ENV_CHECKM2:-checkm2}"
+ENV_CHECKM2="${ENV_CHECKM2:-env_checkm2}"
 ENV_TAXONOMY="${ENV_TAXONOMY:-env_taxonomy}"
 ENV_ANNOTATION="${ENV_ANNOTATION:-env_annotation}"
 ENV_CHARACTERIZATION="${ENV_CHARACTERIZATION:-env_characterization}"
