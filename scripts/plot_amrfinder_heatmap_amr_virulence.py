@@ -83,6 +83,11 @@ def main():
     amr = read_matrix(args.amr)
     vir = read_matrix(args.virulence)
 
+    # Early exit if no genes detected
+    if amr.shape[1] == 0 and vir.shape[1] == 0:
+        print("[WARN] No genes detected in dataset. Skipping heatmap.")
+        return
+
     # matrices checks
     if amr.shape[1] == 0:
         print ("[WARN] AMR matrix has no genes")
@@ -102,7 +107,8 @@ def main():
     vir_top = select_and_order(vir, args.top_vir, args.order)
     # Combine matrices robustly
     if amr_top.shape[1] == 0 and vir_top.shape[1] == 0:
-        raise ValueError("Both AMR and VIRULENCE matrices are empty. Nothing to plot.")
+        print("[INFO] No AMR or VIRULENCE genes detected in all samples. Skipping heatmap")
+        return
     
     elif vir_top.shape[1] == 0:
         print("[WARN] No VIRULENCE genes. Plotting AMR only.")
