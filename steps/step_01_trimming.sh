@@ -115,6 +115,13 @@ mkdir -p "${SYLPH_TABLE_DIR}"
 mkdir -p "${LOG_DIR}"
 
 ############################################
+# STATUS FILE
+############################################
+
+STATUS_FILE="${ROOT_DIR}/${RESULTS_DIR}/pipeline_status.tsv"
+init_status_file
+
+############################################
 # CHECK CONDA ENV
 ############################################
 
@@ -126,6 +133,16 @@ fi
 ############################################
 # FUNCTIONS
 ############################################
+
+check_reads_exist() {
+    local reads="$1"
+
+    if [[ ! -s "$reads" ]]; then
+        return 1
+    fi
+
+    return 0
+}
 
 run_nanostat() {
     local input_fastq="$1"
@@ -313,13 +330,16 @@ while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT
 do
     [[ -z "${SAMPLE_ID}" ]] && continue
 
-    echo
     echo "--------------------------------------------------"
-    echo "Processing sample: ${SAMPLE_ID}"
+    echo "Processing sample     : ${SAMPLE_ID}"
     echo "asm_type              : ${ASM_TYPE}"
     echo "expected_genome_size  : ${EXPECTED_GENOME_SIZE}"
     echo "--------------------------------------------------"
 
+    #Status per file
+    status_start "$SAMPLE_ID" "trimming"
+
+    #Validate assembly type from samplesheet file
     validate_asm_type "${ASM_TYPE}"
 
     if is_na "${EXPECTED_GENOME_SIZE}"; then
@@ -328,7 +348,6 @@ do
         validate_genome_size "${EXPECTED_GENOME_SIZE}"
     fi
 
-
     if [[ "${ASM_TYPE}" == "hybrid" ]]; then
         log_info "Sample ${SAMPLE_ID} configured for hybrid assembly"
     else
@@ -336,8 +355,8 @@ do
     fi
 
 
+    #INPUTS and OUTPUT variables
     RAW_FASTQ="${RAW_DIR}/${LONG_READS}"
-    require_file "${RAW_FASTQ}" "raw FASTQ for ${SAMPLE_ID}"
 
     PORECHOP_FASTQ="${PORECHOP_DIR}/${SAMPLE_ID}.${PORECHOP_PREFIX}.fastq.gz"
     CLEAN_FASTQ="${CLEAN_DIR}/${SAMPLE_ID}.${TRIMMER}.${FILTLONG_PREFIX}.fastq.gz"
@@ -347,10 +366,23 @@ do
 
     SAMPLE_LOG="${LOG_DIR}/${SAMPLE_ID}.${TRIMMER}.trimming.log"
 
-    # RESUME LOGIC
-    should_skip_sample "${CLEAN_FASTQ}" && continue
+    #CHECK IF INPUT READS EXIST
+    if ! check_reads_exist "$RAW_FASTQ"; then
+        log_warn "Reads not found for $SAMPLE_ID"
+        status_fail "$SAMPLE_ID" "trimming" "missing_reads"
+        continue
+    fi
 
+    #ADD LOG INFO
+    log_info "Reads found fot $SAMPLE_ID"
 
+    # RESUME LOGIC FOR RESUME
+    if should_skip_sample "${CLEAN_FASTQ}"; then
+        status_skip "$SAMPLE_ID" "trimming" "resume_existing_output"
+        continue
+    fi
+
+    #RUN TRIMMING BLOCK
     {
         echo "[INFO] Sample: ${SAMPLE_ID}"
         echo "[INFO] Raw FASTQ: ${RAW_FASTQ}"
@@ -358,36 +390,42 @@ do
         echo "[INFO] Output clean FASTQ: ${CLEAN_FASTQ}"
 
         echo "[INFO] Running NanoStat on raw reads"
-        run_nanostat "${RAW_FASTQ}" "${SAMPLE_ID}.raw" "${QC_RAW_DIR}"
+        run_safe "nanostat_raw" run_nanostat "${RAW_FASTQ}" "${SAMPLE_ID}.raw" "${QC_RAW_DIR}" || true
 
         echo "[INFO] Running trimming"
         if [[ "${TRIMMER}" == "fastplong" ]]; then
-            run_fastplong "${RAW_FASTQ}" "${CLEAN_FASTQ}" "${SAMPLE_ID}"
+            run_safe "fastplong" run_fastplong "${RAW_FASTQ}" "${CLEAN_FASTQ}" "${SAMPLE_ID}"
 
         elif [[ "${TRIMMER}" == "porechop_filtlong" ]]; then
-            run_porechop_filtlong "${RAW_FASTQ}" "${PORECHOP_FASTQ}" "${CLEAN_FASTQ}" "${SAMPLE_ID}"
-
+            run_safe "porechop_filtlong" run_porechop_filtlong "${RAW_FASTQ}" "${PORECHOP_FASTQ}" "${CLEAN_FASTQ}" "${SAMPLE_ID}"
+        
         else
             echo "ERROR: unknown TRIMMER value: ${TRIMMER}"
             exit 1
         fi
 
-        if [[ ! -s "${CLEAN_FASTQ}" ]]; then
-            echo "ERROR: clean FASTQ was not generated for ${SAMPLE_ID}"
-            exit 1
-        fi
+            echo "[INFO] Running NanoStat on clean reads"
+            run_safe "nanostat_clean" run_nanostat "${CLEAN_FASTQ}" "${SAMPLE_ID}.${TRIMMER}.${FILTLONG_PREFIX}" "${QC_CLEAN_DIR}" || true
 
-        echo "[INFO] Running NanoStat on clean reads"
-        run_nanostat "${CLEAN_FASTQ}" "${SAMPLE_ID}.${TRIMMER}.${FILTLONG_PREFIX}" "${QC_CLEAN_DIR}"
+            echo "[INFO] Running sylph skecth"
+            run_safe "sylph_sketch" run_sylph_sketch "${CLEAN_FASTQ}" "${SAMPLE_ID}" "${SYLPH_SKETCH_DIR}" || true
 
-        echo "[INFO] Running sylph skecth"
-        run_sylph_sketch "${CLEAN_FASTQ}" "${SAMPLE_ID}" "${SYLPH_SKETCH_DIR}"
+            echo "[INFO] Running individual profile"
+            run_safe "sylph_profile" run_sylph_profile_individual "${SAMPLE_ID}" "${SYLPH_SKETCH_DIR}" "${SYLPH_TABLE_DIR}" || true
 
-        echo "[INFO] Running individual profile"
-        run_sylph_profile_individual "${SAMPLE_ID}" "${SYLPH_SKETCH_DIR}" "${SYLPH_TABLE_DIR}"
+            echo "[INFO] Sample ${SAMPLE_ID} completed successfully"
 
-        echo "[INFO] Sample ${SAMPLE_ID} completed successfully"
     } > "${SAMPLE_LOG}" 2>&1
+
+    #Check output
+    if ! check_file_not_empty "$CLEAN_FASTQ"; then
+        log_warn "Empty clean FASTQ for $SAMPLE_ID"
+        status_fail "$SAMPLE_ID" "trimming" "empty_trimmed_reads"
+        continue
+    fi
+
+    #FINAL LOG STATUS
+    status_ok "$SAMPLE_ID" "trimming"
 
     echo "Done: ${SAMPLE_ID}"
 done < <(tail -n +2 "${SAMPLES}")
@@ -456,5 +494,9 @@ if [[ -f "${MULTIQC_CLEAN_DIR}/multiqc_data/multiqc_nanostat.txt" ]]; then
 fi
 
 cd "${ROOT_DIR}"
+
+#Final log info
+log_info "Trimming step completed for all samples"
+awk '$2=="trimming"' "${STATUS_FILE}"
 
 echo "[INFO] TRIMMING module completed"

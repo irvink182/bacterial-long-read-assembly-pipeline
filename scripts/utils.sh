@@ -138,6 +138,79 @@ abs_path() {
     fi
 }
 
+
+# ------------------------------------------------------------
+# Log Status
+# ------------------------------------------------------------
+
+log_status() {
+    local sample="$1"
+    local step="$2"
+    local status="$3"
+    local reason="${4:--}"
+
+    # checking
+    if [[ -z "${STATUS_FILE:-}" ]]; then
+        echo "[ERROR] STATUS_FILE is not defined" >&2
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$STATUS_FILE")"
+
+    # Timestamp
+    local ts
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+
+    # write "status_file"
+    printf "%s\t%s\t%s\t%s\t%s\n" \
+        "$sample" "$step" "$status" "$reason" "$ts" >> "$STATUS_FILE"
+}
+
+# ------------------------------------------------------------
+# Status files
+# ------------------------------------------------------------
+
+STATUS_STARTED="STARTED"
+STATUS_COMPLETED="COMPLETED"
+STATUS_FAILED="FAILED"
+STATUS_SKIPPED="SKIPPED"
+
+init_status_file() {
+    mkdir -p "$(dirname "$STATUS_FILE")"
+
+    local expected=$'sample\tstep\tstatus\treason\ttimestamp'
+
+    if [[ ! -f "$STATUS_FILE" ]]; then
+        echo "$expected" > "$STATUS_FILE"
+    else
+        local header
+        header=$(head -1 "$STATUS_FILE")
+
+        if [[ "$header" != "$expected" ]]; then
+            echo "[ERROR] STATUS_FILE header mismatch" >&2
+            echo "[ERROR] Expected: $expected" >&2
+            echo "[ERROR] Found   : $header" >&2
+            exit 1
+        fi
+    fi
+}
+
+status_start() {
+    log_status "$1" "$2" "$STATUS_STARTED"
+}
+
+status_ok() {
+    log_status "$1" "$2" "$STATUS_COMPLETED"
+}
+
+status_fail() {
+    log_status "$1" "$2" "$STATUS_FAILED" "$3"
+}
+
+status_skip() {
+    log_status "$1" "$2" "$STATUS_SKIPPED" "$3"
+}
+
 # ------------------------------------------------------------
 # Empty files check (low input files)
 # ------------------------------------------------------------
@@ -158,21 +231,38 @@ check_file_not_empty() {
 # check FASTQ files (low number of reads)
 # ------------------------------------------------------------
 
-check_min_reads() {
-    local fastq="$1"
+check_min_reads_nanostat() {
+    local nanostat="$1"
     local min_reads="$2"
 
-    local count
-    count=$(grep -c "^+$" "$fastq" 2>/dev/null || echo 0)
+    if [[ ! -f "$nanostat" ]]; then
+        log_warn "Nanostat file missing: $nanostat"
+        return 1
+    fi
 
-    if [[ "$count" -lt "$min_reads" ]]; then
-        log_warn "Low read count: $count (< $min_reads)"
+    local reads
+
+    reads=$(grep "Number of reads:" "$nanostat" 2>/dev/null | awk -F: '{print $2}')
+    
+    if [[ -z "$reads" ]]; then
+        log_warn "Could not extract read count from $nanostat"
+        return 1
+    fi
+
+    reads=$(echo "$reads" | tr -d ' ,' | sed 's/\..*$//')
+
+    if ! [[ "$reads" =~ ^[0-9]+$ ]]; then
+        log_warn "Invalid read count: $reads"
+        return 1
+    fi
+
+    if (( reads < min_reads )); then
+        log_warn "Low reads ($reads < $min_reads)"
         return 1
     fi
 
     return 0
 }
-
 
 # ------------------------------------------------------------
 # Safe run, run the pipeline everytime
@@ -182,7 +272,12 @@ run_safe() {
     local step_name="$1"
     shift
 
-    if ! "$@"; then
+    set +e
+    "$@"
+    local status=$?
+    set -e
+
+    if [[ $status -ne 0 ]]; then
         log_warn "Step failed: ${step_name}"
         return 1
     fi
@@ -196,9 +291,13 @@ run_safe() {
 # ------------------------------------------------------------
 
 skip_sample() {
-    local reason="$1"
+    local sample="$1"
+    local step="$2"
+    local reason="$3"
 
-    log_warn "Skipping sample: $reason"
+    log_warn "Skipping ${sample}: $reason"
+    status_skip "$sample" "$step" "$reason"
+
     return 1
 }
 

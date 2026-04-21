@@ -107,6 +107,16 @@ mkdir -p "${TAXONOMY_MERGED_DIR}"
 mkdir -p "${TAXONOMY_LOG_DIR}"
 
 ############################################
+# STATUS FILE
+############################################
+
+STATUS_FILE="${ROOT_DIR}/results/pipeline_status.tsv"
+init_status_file
+
+export STATUS_FILE
+export UTILS_FILE
+
+############################################
 # CHECK CONDA ENVS
 ############################################
 
@@ -170,7 +180,10 @@ export SOURMASH_SIG_DIR SOURMASH_SEARCH_DIR SKANI_SEARCH_DIR MLST_INDIVIDUAL_DIR
 export SOURMASH_KSIZE SOURMASH_SCALED SKANI_THREADS SKANI_TOPN SKANI_BOTH_MIN_AF
 export TAXONOMY_LOG_DIR
 export -f resolve_asm
-
+export -f status_start
+export -f status_ok
+export -f status_fail
+export -f status_skip
 
 ############################################
 # MAIN
@@ -197,6 +210,38 @@ head -n 6 "${SAMPLES}" | tail -n +2 | cut -f1 | while read -r s; do
 done
 
 ############################################
+# FILTERING ONLY TRUE SAMPLES
+############################################
+
+log_info "Filtering samples and initializing status..."
+
+VALID_SAMPLES_FILE=$(mktemp)
+# Making a clean list of samples
+tail -n +2 "${SAMPLES}" | while IFS=$'\t' read -r SAMPLE_ID REST; do
+    ASM=$(resolve_asm "${SAMPLE_ID}")
+    
+    # Skip FAILED samples
+    if grep -qE "${SAMPLE_ID}.*(trimming|assembly).*(FAILED|SKIPPED)" "${STATUS_FILE}"; then
+        log_warn "Sample ${SAMPLE_ID} ignored: previous steps were not COMPLETED."
+        continue
+    fi
+
+    # Work only with samples with assembly
+    if [[ -n "${ASM}" ]]; then
+        echo -e "${SAMPLE_ID}\t${REST}" >> "${VALID_SAMPLES_FILE}"
+        status_start "${SAMPLE_ID}" "taxonomy"
+    else
+        # SKIPPED samples
+        log_warn "Assembly not found for ${SAMPLE_ID}. Skipping taxonomy."
+        status_skip "${SAMPLE_ID}" "taxonomy" "missing_assembly"
+    fi
+done
+
+# Save a variable
+N_VALID=$(wc -l < "${VALID_SAMPLES_FILE}")
+log_info "Proceeding with ${N_VALID} valid samples for parallel execution."
+
+############################################
 # 1) SOURMASH SKETCH
 ############################################
 
@@ -206,16 +251,19 @@ if [[ "${RESUME}" == "true" && -n "$(ls -A ${SOURMASH_SIG_DIR}/*.sig.gz 2>/dev/n
     log_info "Skipping sourmash sketch: signatures already exist"
 else
 
-tail -n +2 "${SAMPLES}" | \
-parallel --colsep '\t' -j "${SKETCH_JOBS}" --halt now,fail=1 --linebuffer \
+cat "${VALID_SAMPLES_FILE}" | \
+parallel --colsep '\t' -j "${SKETCH_JOBS}" --halt never --linebuffer \
 '
+source "'"${UTILS_FILE}"'"
+
 sample={1}
 gsize={3}
 
 asm=$(resolve_asm "$sample")
 if [[ -z "$asm" ]]; then
     echo "Missing assembly for sample: $sample" >&2
-    exit 2
+    status_skip "$sample" "taxonomy" "missing_assembly"
+    exit 0
 fi
 
 out_sig="'"${SOURMASH_SIG_DIR}"'/${sample}.sig.gz"
@@ -228,6 +276,12 @@ conda run --no-capture-output -n "'"${ENV_TAXONOMY}"'" \
     -p k='"${SOURMASH_KSIZE}"',scaled='"${SOURMASH_SCALED}"',noabund \
     -o "$out_sig" \
     "$asm" >> "$log" 2>&1
+
+if [[ ! -s "$out_sig" ]]; then
+    status_fail "$sample" "taxonomy" "sourmash_sketch_failed"
+    exit 0
+fi
+
 '
 fi
 
@@ -241,9 +295,11 @@ if [[ "${RESUME}" == "true" && -n "$(ls -A ${SOURMASH_SEARCH_DIR}/*.sourmash.sea
     log_info "Skipping sourmash search: results already exist"
 else
 
-tail -n +2 "${SAMPLES}" | \
-parallel --colsep '\t' -j "${SMASH_JOBS}" --halt now,fail=1 --linebuffer \
+cat "${VALID_SAMPLES_FILE}" | \
+parallel --colsep '\t' -j "${SKETCH_JOBS}" --halt never --linebuffer \
 '
+source "'"${UTILS_FILE}"'"
+
 sample={1}
 gsize={3}
 
@@ -253,7 +309,8 @@ log="'"${TAXONOMY_LOG_DIR}"'/${sample}.sourmash.search.log"
 
 if [[ ! -s "$sig" ]]; then
     echo "Missing sig: $sig" >&2
-    exit 2
+    status_skip "$sample" "taxonomy" "missing_sourmash_sig"
+    exit 0
 fi
 
 echo "sample=$sample expected_genome_size=$gsize sig=$sig" > "$log"
@@ -262,6 +319,12 @@ conda run --no-capture-output -n "'"${ENV_TAXONOMY}"'" \
     sourmash search \
     "$sig" "'"${SOURMASH_DB}"'" \
     --output "$out_csv" >> "$log" 2>&1
+
+if [[ ! -s "$out_csv" ]]; then
+    status_fail "$sample" "taxonomy" "sourmash_search_failed"
+    exit 0
+fi
+
 '
 fi
 
@@ -275,16 +338,19 @@ if [[ "${RESUME}" == "true" && -n "$(ls -A ${SKANI_SEARCH_DIR}/*.skani.search.ts
     log_info "Skipping skani search: results already exist"
 else
 
-tail -n +2 "${SAMPLES}" | \
-parallel --colsep '\t' -j "${SKANI_JOBS}" --halt now,fail=1 --linebuffer \
+cat "${VALID_SAMPLES_FILE}" | \
+parallel --colsep '\t' -j "${SKETCH_JOBS}" --halt never --linebuffer \
 '
+source "'"${UTILS_FILE}"'"
+
 sample={1}
 gsize={3}
 
 asm=$(resolve_asm "$sample")
 if [[ -z "$asm" ]]; then
     echo "Missing assembly for sample: $sample" >&2
-    exit 2
+    status_skip "$sample" "taxonomy" "missing_assembly"
+    exit 0
 fi
 
 out_tsv="'"${SKANI_SEARCH_DIR}"'/${sample}.skani.search.tsv"
@@ -300,6 +366,12 @@ conda run --no-capture-output -n "'"${ENV_TAXONOMY}"'" \
     -n "'"${SKANI_TOPN}"'" \
     -t "'"${SKANI_THREADS}"'" \
     -o "$out_tsv" >> "$log" 2>&1
+
+if [[ ! -s "$out_tsv" ]]; then
+    status_fail "$sample" "taxonomy" "skani_search_failed"
+    exit 0
+fi
+
 '
 fi
 
@@ -313,16 +385,19 @@ if [[ "${RESUME}" == "true" && -n "$(ls -A ${MLST_INDIVIDUAL_DIR}/*.mlst.tsv 2>/
     log_info "Skipping MLST: results already exist"
 else
 
-tail -n +2 "${SAMPLES}" | \
-parallel --colsep '\t' -j "${MLST_JOBS}" --halt now,fail=1 --linebuffer \
+cat "${VALID_SAMPLES_FILE}" | \
+parallel --colsep '\t' -j "${SKETCH_JOBS}" --halt never --linebuffer \
 '
+source "'"${UTILS_FILE}"'"
+
 sample={1}
 gsize={3}
 
 asm=$(resolve_asm "$sample")
 if [[ -z "$asm" ]]; then
     echo "Missing assembly for sample: $sample" >&2
-    exit 2
+    status_skip "$sample" "taxonomy" "missing_assembly"
+    exit 0
 fi
 
 out_tsv="'"${MLST_INDIVIDUAL_DIR}"'/${sample}.mlst.tsv"
@@ -334,8 +409,28 @@ conda run --no-capture-output -n "'"${ENV_TAXONOMY}"'" \
     mlst \
     --label "$sample" \
     "$asm" > "$out_tsv" 2>> "$log"
+
+if [[ ! -s "$out_tsv" ]]; then
+    status_fail "$sample" "taxonomy" "mlst_failed"
+    exit 0
+fi
+
 '
 fi
+
+############################################
+# FINAL STATUS PER SAMPLE
+############################################
+
+echo "[FINAL] Evaluating taxonomy status per sample..."
+
+cat "$VALID_SAMPLES_FILE" | cut -f1 | while read -r sample; do
+    if ! grep -qE "${sample}.*taxonomy.*(FAILED|SKIPPED)" "${STATUS_FILE}"; then
+        status_ok "$sample" "taxonomy"
+    fi
+done
+
+rm "$VALID_SAMPLES_FILE"
 
 ############################################
 # MLST SUMMARY
@@ -374,5 +469,8 @@ conda run --no-capture-output -n "${ENV_ANALYSIS}" python3 "${MERGE_TAXONOMY_BIN
     2> "${TAXONOMY_LOG_DIR}/merge_taxonomy.stderr.log"
 fi
 
+#Final log info
+log_info "Taxonomy step completed for all samples"
+awk '$2=="taxonomy"' "${STATUS_FILE}"
 echo "[INFO] Taxonomy module completed"
 echo "[DONE] Outputs written to: ${ROOT_DIR}/${TAXONOMY_RESULTS_DIR}"

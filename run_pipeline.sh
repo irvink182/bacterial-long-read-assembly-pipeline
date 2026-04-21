@@ -42,6 +42,7 @@ usage() {
     echo "  characterization"
     echo "  final_summary"
     echo "  cleanup"
+    echo "  run_summary"
     echo "  all"
     echo
     echo "Optional overrides:"
@@ -190,6 +191,9 @@ case "${STEP}" in
     cleanup)
         run_step "cleanup" "${STEPS_DIR}/step_08_cleanup.sh"
         ;;
+    run_summary)
+        run_step "run_summary" "${STEPS_DIR}/step_09_pipeline_summary.sh"
+        ;;
     all)
         run_step "trimming" "${STEPS_DIR}/step_01_trimming.sh"
         run_step "assembly" "${STEPS_DIR}/step_02_assembly.sh"
@@ -199,6 +203,7 @@ case "${STEP}" in
         run_step "characterization" "${STEPS_DIR}/step_06_characterization.sh"
         run_step "final_summary" "${STEPS_DIR}/step_07_final_summary.sh"
         run_step "cleanup" "${STEPS_DIR}/step_08_cleanup.sh"
+        run_step "run_summary" "${STEPS_DIR}/step_09_pipeline_summary.sh"
         ;;
     *)
         echo "Invalid step: ${STEP}"

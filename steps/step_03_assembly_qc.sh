@@ -101,6 +101,16 @@ mkdir -p "${CHECKM2_SUMMARY_DIR}"
 mkdir -p "${QC_LOG_DIR}"
 
 ############################################
+# STATUS FILE
+############################################
+
+STATUS_FILE="${ROOT_DIR}/results/pipeline_status.tsv"
+init_status_file
+
+export STATUS_FILE
+export UTILS_FILE
+
+############################################
 # CHECK CONDA ENV
 ############################################
 
@@ -168,10 +178,29 @@ while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT
 do
     [[ -z "${SAMPLE_ID}" ]] && continue
 
-    echo
     echo "--------------------------------------------------"
     echo "Processing sample: ${SAMPLE_ID}"
     echo "--------------------------------------------------"
+
+    # --- FILTERS FOR EMPTY/FAILED SAMPLES ---
+    # # Checking if the sample failed in previous steps
+    if grep -qE "${SAMPLE_ID}.*FAILED" "${STATUS_FILE}"; then
+        log_warn "Skipping ${SAMPLE_ID}: Sample has FAILED status in previous steps."
+        continue
+    fi
+
+    # Checking if the sample has assembly, if not, SKIPPED.
+    ASSEMBLY_FASTA="${INPUT_FASTA_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
+    
+    if [[ ! -f "${ASSEMBLY_FASTA}" || ! -s "${ASSEMBLY_FASTA}" ]]; then
+        log_warn "Assembly not found for ${SAMPLE_ID}. Marking as SKIPPED in QC."
+        status_skip "$SAMPLE_ID" "assembly_qc" "missing_assembly"
+        continue
+    fi
+
+
+    #Status per file
+    status_start "$SAMPLE_ID" "assembly_qc"
 
     validate_asm_type "${ASM_TYPE}"
 
@@ -182,7 +211,6 @@ do
     fi
 
     ASSEMBLY_FASTA="${INPUT_FASTA_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
-    require_file "${ASSEMBLY_FASTA}" "assembly fasta for ${SAMPLE_ID}"
 
     SAMPLE_QUAST_DIR="${QUAST_INDIVIDUAL_DIR}/${SAMPLE_ID}"
     SAMPLE_CHECKM2_DIR="${CHECKM2_INDIVIDUAL_DIR}/${SAMPLE_ID}"
@@ -199,6 +227,17 @@ do
     RUN_CHECKM2=true
 
     # =========================
+    # Checking inputs
+    # =========================
+
+    #Checking input assembly
+    if ! check_file_not_empty "${ASSEMBLY_FASTA}"; then
+        log_warn "Assembly not found: ${SAMPLE_ID}"
+        status_skip "$SAMPLE_ID" "assembly_qc" "missing_assembly"
+        continue
+    fi
+
+    # =========================
     # Resume logic (granular)
     # =========================
     if [[ "${RESUME}" == "true" && -s "${QUAST_REPORT}" ]]; then
@@ -211,54 +250,73 @@ do
         RUN_CHECKM2=false
     fi
 
-    # Si ambos existen → skip total
+    # If both outputs exist → skip all step
     if [[ "${RUN_QUAST}" == "false" && "${RUN_CHECKM2}" == "false" ]]; then
         log_info "Skipping ${SAMPLE_ID}: all QC outputs already exist"
+        status_skip "$SAMPLE_ID" "assembly_qc" "resume_existing_outputs"
         continue
     fi
 
     mkdir -p "${SAMPLE_QUAST_DIR}"
     mkdir -p "${SAMPLE_CHECKM2_DIR}"
 
-    {
-        echo "[INFO] Sample: ${SAMPLE_ID}"
-        echo "[INFO] Assembly: ${ASSEMBLY_FASTA}"
+    echo "[INFO] Sample: ${SAMPLE_ID}"
+    echo "[INFO] Assembly: ${ASSEMBLY_FASTA}"
 
-        # =========================
-        # QUAST
-        # =========================
+    # =========================
+    # QUAST
+    # =========================
+    #RUN QUAST QC BLOCK
+    {
         if [[ "${RUN_QUAST}" == "true" ]]; then
             echo "[INFO] QUAST: ${SAMPLE_ID}"
-            run_quast "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_QUAST_DIR}"
+            run_safe "quast" run_quast "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_QUAST_DIR}"
             echo "[INFO] QUAST: ${SAMPLE_ID} finished"
         else
-            echo "[INFO] QUAST skipped"
+            echo "[INFO] QUAST skipped : ${SAMPLE_ID}"
         fi
+    } >> "${SAMPLE_LOG}" 2>&1
 
-        # =========================
-        # CHECKM2
-        # =========================
+    # Checking quast output
+    if [[ "${RUN_QUAST}" == "true" ]] && ! check_file_not_empty "${QUAST_REPORT}"; then
+        log_warn "Quast output empty for ${SAMPLE_ID}"
+        status_fail "$SAMPLE_ID" "assembly_qc" "quast_failed"
+        continue
+    fi
+
+    #FINAL LOG STATUS
+    status_ok "$SAMPLE_ID" "assembly_qc"
+
+    # =========================
+    # CHECKM2
+    # =========================
+    #RUN CHECKM2 QC BLOCK
+    {
         if [[ "${RUN_CHECKM2}" == "true" ]]; then
             echo "[INFO] CHECKM2: ${SAMPLE_ID}"
-            run_checkm2 "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_CHECKM2_DIR}"
+            run_safe "checkm2" run_checkm2 "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_CHECKM2_DIR}"
             echo "[INFO] CHECKM2: ${SAMPLE_ID} finished"
         else
-            echo "[INFO] CHECKM2 skipped"
+            echo "[INFO] CHECKM2 skipped: ${SAMPLE_ID}"
         fi
+    } >> "${SAMPLE_LOG}" 2>&1
 
-    } > "${SAMPLE_LOG}" 2>&1
+    # Checking checkm2 output
+    if [[ "${RUN_CHECKM2}" == "true" ]] && ! check_file_not_empty "${CHECKM2_REPORT}"; then
+        log_warn "Checkm2 output empty for ${SAMPLE_ID}"
+        status_fail "$SAMPLE_ID" "assembly_qc" "checkm2_failed"
+        continue
+    fi
+
+    #FINAL LOG STATUS
+    status_ok "$SAMPLE_ID" "assembly_qc"
 
     echo "Done: ${SAMPLE_ID}"
-
 done < <(tail -n +2 "${SAMPLES}")
 
 # Count number of samples (excluding header)
 N_SAMPLES=$(($(wc -l < "${SAMPLES}") - 1))
 log_info "Detected ${N_SAMPLES} samples"
-
-############################################
-# MULTIQC FOR QUAST
-############################################
 
 ############################################
 # MULTIQC FOR QUAST
@@ -335,4 +393,8 @@ do
     fi
 done < <(tail -n +2 "${SAMPLES}")
 
+
+#Final log info
+log_info "Assembly_qc step completed for all samples"
+awk '$2=="assembly_qc"' "${STATUS_FILE}"
 echo "[INFO] ASSEMBLY QC module completed"

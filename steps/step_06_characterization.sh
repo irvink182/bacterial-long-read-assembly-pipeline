@@ -113,6 +113,16 @@ mkdir -p "${MOBSUITE_SUMMARY_DIR}"
 mkdir -p "${CHARACTERIZATION_LOG_DIR}"
 
 ############################################
+# STATUS FILE
+############################################
+
+STATUS_FILE="${ROOT_DIR}/results/pipeline_status.tsv"
+init_status_file
+
+export STATUS_FILE
+export UTILS_FILE
+
+############################################
 # CHECK CONDA ENVS
 ############################################
 
@@ -204,15 +214,54 @@ echo "MOBsuite individual dir   : ${MOBSUITE_INDIVIDUAL_DIR}"
 echo "=================================================="
 
 echo "[INFO] Step A: GENOMIC CHARACTERIZATION"
+VALID_SAMPLES_FILE=$(mktemp)
 
+tail -n +2 "${SAMPLES}" | while IFS=$'\t' read -r SID TYPE SIZE LONG R1 R2
+do
+    [[ -z "${SID}" ]] && continue
+
+    # --- FILTERS FOR EMPTY/FAILED SAMPLES ---
+    # # Checking if the sample failed in previous steps
+    if grep -qE "${SID}.*(trimming|assembly|annotation).*(FAILED|SKIPPED)" "${STATUS_FILE}"; then
+        continue
+    fi
+
+    # INPUT FILES PATHS
+    ASSEMBLY_FASTA="${INPUT_FASTA_DIR}/${SID}.${FINAL_ASM_PREFIX}.fasta"
+    BAKTA_SAMPLE_DIR="${BAKTA_DIR}/${SID}"
+    BAKTA_FILE="${BAKTA_SAMPLE_DIR}/${SID}.gff3"
+
+    # Checking if the sample has assembly, if not, SKIPPED.
+    if [[ -s "${ASSEMBLY_FASTA}" && -s "${BAKTA_FILE}" ]]; then
+        echo -e "${SID}\t${TYPE}\t${SIZE}\t${LONG}\t${R1}\t${R2}" >> "${VALID_SAMPLES_FILE}"
+        status_start "$SID" "characterization"
+    else
+        status_skip "${SID}" "characterization" "missing_input_files"
+        log_warn "Required input files missing for ${SID}. Skipping characterization step."
+    fi
+done
+
+#MAIN LOOP
 while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT_R1 SHORT_R2
 do
+
     [[ -z "${SAMPLE_ID}" ]] && continue
 
-    echo
     echo "--------------------------------------------------"
     echo "Processing sample: ${SAMPLE_ID}"
     echo "--------------------------------------------------"
+
+    # PATHS TO CHECK INPUT FILES
+    ASSEMBLY_FASTA="${INPUT_FASTA_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
+    BAKTA_SAMPLE_DIR="${BAKTA_DIR}/${SAMPLE_ID}"
+    BAKTA_FILE="${BAKTA_SAMPLE_DIR}/${SAMPLE_ID}.gff3"
+
+    SAMPLE_LOG="${CHARACTERIZATION_LOG_DIR}/${SAMPLE_ID}.characterization.log"
+
+    #OUTPUT PATHS
+    AMRFINDER_OUTFILE="${AMRFINDER_INDIVIDUAL_DIR}/${SAMPLE_ID}.${AMRFINDER_PREFIX}.result.tsv"
+    PLASMIDFINDER_SAMPLE_DIR="${PLASMIDFINDER_INDIVIDUAL_DIR}/${SAMPLE_ID}"
+    MOBSUITE_OUTFILE="${MOBSUITE_INDIVIDUAL_DIR}/${SAMPLE_ID}.${MOBSUITE_PREFIX}.result.tsv"
 
     validate_asm_type "${ASM_TYPE}"
 
@@ -222,25 +271,22 @@ do
         validate_genome_size "${EXPECTED_GENOME_SIZE}"
     fi
 
-    ASSEMBLY_FASTA="${INPUT_FASTA_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
-    BAKTA_SAMPLE_DIR="${BAKTA_DIR}/${SAMPLE_ID}"
-    require_file "${ASSEMBLY_FASTA}" "assembly FASTA for ${SAMPLE_ID}"
-    require_dir "${BAKTA_SAMPLE_DIR}" "Bakta annotation dir for ${SAMPLE_ID}"
+    # =========================
+    # Checking inputs
+    # =========================
 
-    AMRFINDER_OUTFILE="${AMRFINDER_INDIVIDUAL_DIR}/${SAMPLE_ID}.${AMRFINDER_PREFIX}.result.tsv"
-    PLASMIDFINDER_SAMPLE_DIR="${PLASMIDFINDER_INDIVIDUAL_DIR}/${SAMPLE_ID}"
-    MOBSUITE_OUTFILE="${MOBSUITE_INDIVIDUAL_DIR}/${SAMPLE_ID}.${MOBSUITE_PREFIX}.result.tsv"
-
-    SAMPLE_LOG="${CHARACTERIZATION_LOG_DIR}/${SAMPLE_ID}.characterization.log"
-
-    if [[ ! -f "${ASSEMBLY_FASTA}" ]]; then
-        echo "ERROR: final assembly not found for ${SAMPLE_ID}: ${ASSEMBLY_FASTA}"
-        exit 1
+    #Checking input assembly
+    if ! check_file_not_empty "${ASSEMBLY_FASTA}"; then
+        log_warn "Assembly not found: ${SAMPLE_ID}"
+        status_skip "$SAMPLE_ID" "characterization" "missing_assembly"
+        continue
     fi
 
-    if [[ ! -d "${BAKTA_SAMPLE_DIR}" ]]; then
-        echo "ERROR: Bakta annotation dir not found for ${SAMPLE_ID}: ${BAKTA_SAMPLE_DIR}"
-        exit 1
+    #Checking input annotation
+    if ! check_file_not_empty "${BAKTA_FILE}"; then
+        log_warn "Annotation not found: ${SAMPLE_ID}"
+        status_skip "$SAMPLE_ID" "characterization" "missing_bakta"
+        continue
     fi
 
 
@@ -285,51 +331,91 @@ do
     # skip total
     if [[ "${RUN_AMR}" == "false" && "${RUN_PLASMID}" == "false" && "${RUN_MOBSUITE}" == "false" && "${RUN_MLST}" == "false" ]]; then
         log_info "Skipping ${SAMPLE_ID}: all characterization outputs exist"
+        status_skip "$SAMPLE_ID" "characterization" "resume_existing_output"
         continue
     fi
 
-    {
-        echo "[INFO] Sample: ${SAMPLE_ID}"
-        echo "[INFO] Assembly: ${ASSEMBLY_FASTA}"
-        echo "[INFO] Bakta dir: ${BAKTA_SAMPLE_DIR}"
+    echo "[INFO] Sample: ${SAMPLE_ID}"
+    echo "[INFO] Assembly: ${ASSEMBLY_FASTA}"
+    echo "[INFO] Bakta dir: ${BAKTA_SAMPLE_DIR}"
 
-        # =========================
-        # AMRFinder
-        # =========================
+    mkdir -p "${PLASMIDFINDER_SAMPLE_DIR}"
+
+    # =========================
+    # AMRFinder
+    # =========================
+    #RUN AMRFinder BLOCK
+    {
         if [[ "${RUN_AMR}" == "true" ]]; then
             echo "[INFO] Running AMRFinder"
-            run_amrfinder "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${BAKTA_SAMPLE_DIR}" "${AMRFINDER_OUTFILE}"
+            run_safe "amrfinder" run_amrfinder "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${BAKTA_SAMPLE_DIR}" "${AMRFINDER_OUTFILE}"
             echo "[DONE] AMRFinderPlus: ${SAMPLE_ID}"
         else
-            echo "[INFO] AMRFinder skipped"
+            echo "[INFO] AMRFinder skipped: ${SAMPLE_ID}"
         fi
+    } >> "${SAMPLE_LOG}" 2>&1
 
-        # =========================
-        # PlasmidFinder
-        # =========================
+    if [[ "${RUN_AMR}" == "true" ]] && ! check_file_not_empty "${AMRFINDER_OUTFILE}"; then
+        status_fail "$SAMPLE_ID" "characterization" "amrfinder_failed"
+        continue
+    fi
+
+    # =========================
+    # PlasmidFinder
+    # =========================
+    #RUN Plasmidfinder BLOCK
+    {
         if [[ "${RUN_PLASMID}" == "true" ]]; then
             echo "[INFO] Running PlasmidFinder"
-            run_plasmidfinder "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${PLASMIDFINDER_SAMPLE_DIR}"
+            run_safe "plasmidfinder" run_plasmidfinder "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${PLASMIDFINDER_SAMPLE_DIR}"
             echo "[DONE] PlasmidFinder: ${SAMPLE_ID}"
         else
-            echo "[INFO] PlasmidFinder skipped"
+            echo "[INFO] PlasmidFinder skipped: ${SAMPLE_ID}"
         fi
+    } >> "${SAMPLE_LOG}" 2>&1
 
-        # =========================
-        # Mobsuite - MobTyper
-        # =========================
+    if [[ "${RUN_PLASMID}" == "true" ]] && ! check_file_not_empty "${PLASMIDFINDER_OUT}"; then
+        status_fail "$SAMPLE_ID" "characterization" "plasmidfinder_failed"
+        continue
+    fi
+
+    # =========================
+    # Mobsuite - MobTyper
+    # =========================
+    #RUN Mobsuite BLOCK
+    {
         if [[ "${RUN_MOBSUITE}" == "true" ]]; then
             echo "[INFO] Running MOB-typer"
             run_mobtyper "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${MOBSUITE_OUTFILE}"
             echo "[DONE] MOB-typer: ${SAMPLE_ID}"
         else
-            echo "[INFO] MOB-typer skipped"
+            echo "[INFO] MOB-typer skipped: ${SAMPLE_ID}"
         fi
+    } >> "${SAMPLE_LOG}" 2>&1
 
-    } > "${SAMPLE_LOG}" 2>&1
+    if [[ "${RUN_MOBSUITE}" == "true" ]] && ! check_file_not_empty "${MOBSUITE_OUTFILE}"; then
+        status_fail "$SAMPLE_ID" "characterization" "mobtyper_failed"
+        continue
+    fi
 
     echo "Done: ${SAMPLE_ID}"
-done < <(tail -n +2 "${SAMPLES}")
+done < "${VALID_SAMPLES_FILE}"
+
+############################################
+# FINAL STATUS PER SAMPLE
+############################################
+
+echo "[FINAL] Evaluating characterization status per sample..."
+
+cat "${VALID_SAMPLES_FILE}" | cut -f1 | while read -r sample; do
+    # Checking only OK samples
+    if grep -qE "^${sample}.*characterization.*STARTED" "${STATUS_FILE}" && \
+       ! grep -qE "^${sample}.*characterization.*FAILED" "${STATUS_FILE}"; then
+        status_ok "$sample" "characterization"
+    fi
+done
+
+rm "${VALID_SAMPLES_FILE}"
 
 ############################################
 # STEP B: AMRFINDER COMBINED TABLE
@@ -411,5 +497,8 @@ fi
 
 cd "${ROOT_DIR}"
 
+#Final log info
+log_info "Characterization step completed for all samples"
+awk '$2=="characterization"' "${STATUS_FILE}"
 echo "[INFO] CHARACTERIZATION module completed"
 echo "[DONE] Outputs written to: ${ROOT_DIR}/${CHARACTERIZATION_RESULTS_DIR}"

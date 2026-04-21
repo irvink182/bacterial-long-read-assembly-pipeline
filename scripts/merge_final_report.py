@@ -295,9 +295,8 @@ def parse_taxonomy(taxonomy_path: str | Path) -> pd.DataFrame:
             "sourmash_ani_est",
             "sylph_adjusted_ani",
         ],
-        "overall_score": [
-            "overall_score",
-            "overall_score",
+        "overall_label": [
+            "overall_label",
         ],
         "skani_species": ["skani_species"],
         "sourmash_species": ["sourmash_species"],
@@ -457,7 +456,6 @@ def parse_plasmidfinder(plasmidfinder_summary_path: str | Path) -> pd.DataFrame:
     "plasmidfinder_has_plasmid": "max",
     })
 
-    # 🔥 FIX CLAVE
     agg_df["plasmidfinder_replicons"] = (
         agg_df["plasmidfinder_replicons"]
         .replace("", "none")
@@ -650,7 +648,7 @@ def main() -> None:
         "final_species",
         "final_genus",
         "ANI",
-        "overall_score",
+        "overall_label",
         "skani_species",
         "sourmash_species",
         "mlst_scheme",
@@ -681,41 +679,52 @@ def main() -> None:
         "has_mobtyper",
     ]
     
-    numeric_cols = [
-        "expected_genome_size",
-        "clean_read_count",
-        "clean_total_bases",
-        "clean_mean_length",
-        "clean_median_length",
-        "clean_read_N50",
-        "clean_mean_qscore",
-        "assembly_size",
-        "contigs",
-        "N50",
-        "L50",
-        "GC_percent",
-        "checkm2_completeness",
-        "checkm2_contamination",
-        "ANI",
-        "overall_score",
-        "mlst_ST",
-        "bakta_cds",
-        "bakta_tRNA",
-        "bakta_rRNA",
-        "bakta_pseudogenes",
-        "amr_gene_count",
-        "virulence_gene_count",
-        "stress_gene_count",
-        "plasmidfinder_hits",
+    int_cols = [
+    "clean_read_count",
+    "clean_total_bases",
+    "clean_mean_length",
+    "clean_median_length",
+    "clean_read_N50",
+    "assembly_size",
+    "N50",
+    "contigs",
+    "L50",
+    "mlst_ST",
+    "bakta_cds",
+    "bakta_tRNA",
+    "bakta_rRNA",
+    "bakta_pseudogenes",
+    "amr_gene_count",
+    "virulence_gene_count",
+    "stress_gene_count",
+    "plasmidfinder_hits",
     ]
 
-    # --- Normalize numeric values ---
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = df[col].apply(clean_numeric)
+    float_cols = [
+    "clean_mean_qscore",
+    "GC_percent",
+    "checkm2_completeness",
+    "checkm2_contamination",
+    "ANI",
+    "estimated_coverage",
+    ]
 
-    # Convert types AFTER cleaning
-    df[numeric_cols] = df[numeric_cols].convert_dtypes()
+    # INT columns
+    for col in int_cols:
+        if col in df.columns:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(",", "", regex=False)
+                .str.extract(r"(\d+)", expand=False)
+                )
+
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+    
+    # FLOAT columns
+    for col in float_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Float64")
 
     # Ensure all columns exist
     for c in final_cols:

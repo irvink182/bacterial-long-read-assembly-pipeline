@@ -103,6 +103,16 @@ mkdir -p "${ASSEMBLY_LOG_DIR}"
 
 
 ############################################
+# STATUS FILE
+############################################
+
+STATUS_FILE="${ROOT_DIR}/results/pipeline_status.tsv"
+init_status_file
+
+export STATUS_FILE
+export UTILS_FILE
+
+############################################
 # CHECK CONDA ENV
 ############################################
 
@@ -260,12 +270,21 @@ while IFS=$'\t' read -r SAMPLE_ID ASM_TYPE EXPECTED_GENOME_SIZE LONG_READS SHORT
 do
     [[ -z "${SAMPLE_ID}" ]] && continue
 
-    echo
     echo "--------------------------------------------------"
     echo "Processing sample: ${SAMPLE_ID}"
     echo "asm_type             : ${ASM_TYPE}"
     echo "expected_genome_size : ${EXPECTED_GENOME_SIZE}"
     echo "--------------------------------------------------"
+
+    # --- FILTER FOR EMPTY/FAILED SAMPLES ---
+    # Checking if the sample failed in trimming step
+    if grep -qE "${SAMPLE_ID}.*trimming.*FAILED" "${STATUS_FILE}"; then
+        log_warn "Skipping ${SAMPLE_ID}: already FAILED in trimming step."
+        continue
+    fi
+
+    #Status per file
+    status_start "$SAMPLE_ID" "assembly"
 
     validate_asm_type "${ASM_TYPE}"
 
@@ -299,8 +318,10 @@ do
     fi
 
 
+    # =========================
+    # Define expected outputs
+    # =========================
     CLEAN_FASTQ="${READS_DIR}/${SAMPLE_ID}.${TRIMMER}.${FILTLONG_PREFIX}.fastq.gz"
-    require_file "${CLEAN_FASTQ}" "clean FASTQ for ${SAMPLE_ID}"
 
     SAMPLE_FLYE_DIR="${FLYE_DIR}/${SAMPLE_ID}"
     SAMPLE_MEDAKA_DIR="${MEDAKA_DIR}/${SAMPLE_ID}"
@@ -313,27 +334,50 @@ do
     TMP_BAM="$COVERAGE_DIR/${SAMPLE_ID}.tmp.bam"
     BAM="${COVERAGE_DIR}/${SAMPLE_ID}.bam"
 
+    # =========================
+    # Checking inputs
+    # =========================
+    # BEFORE RUNNING ANYTHING
+    MIN_READS=15000
+
+    # Check if nanostat report exist
+    CLEAN_STATS="${QC_CLEAN_DIR}/${SAMPLE_ID}.${TRIMMER}.clean.txt"
+
+    if [[ ! -f "${CLEAN_STATS}" ]]; then
+        log_warn "Skipping ${SAMPLE_ID}: No QC stats found (likely failed in step 01)"
+        continue
+    fi
+
+    #Checking number of reads before
+    if ! check_min_reads_nanostat "${CLEAN_STATS}" "${MIN_READS}"; then
+        log_warn "Skipping ${SAMPLE_ID} (low reads: < ${MIN_READS})"
+        status_skip "$SAMPLE_ID" "assembly" "low_reads"
+        continue
+    fi
+
     # RESUME LOGIC
-    should_skip_sample "${FINAL_ASSEMBLY}" && continue
+    if should_skip_sample "${FINAL_ASSEMBLY}"; then
+        status_skip "$SAMPLE_ID" "assembly" "resume_existing_output"
+        continue
+    fi
 
     mkdir -p "${SAMPLE_FLYE_DIR}"
     mkdir -p "${SAMPLE_MEDAKA_DIR}"
 
-    require_file "${CLEAN_FASTQ}" clean FASTQ for ${SAMPLE_ID}
+    echo "[INFO] Sample: ${SAMPLE_ID}"
+    echo "[INFO] Clean FASTQ: ${CLEAN_FASTQ}"
+    echo "[INFO] Genome size: ${EXPECTED_GENOME_SIZE}"
 
-    {
-        echo "[INFO] Sample: ${SAMPLE_ID}"
-        echo "[INFO] Clean FASTQ: ${CLEAN_FASTQ}"
-        echo "[INFO] Genome size: ${EXPECTED_GENOME_SIZE}"
-
-        ############################################
-        # FLYE
-        ############################################
+    #RUN FLYE ASSEMBLY BLOCK
+    {   
         echo "[INFO] Running Flye"
-        run_flye "${CLEAN_FASTQ}" "${EXPECTED_GENOME_SIZE}" "${SAMPLE_FLYE_DIR}"
+        # Running Flye (safe mode)
+        run_safe "flye" run_flye "${CLEAN_FASTQ}" "${EXPECTED_GENOME_SIZE}" "${SAMPLE_FLYE_DIR}"
 
-        require_file "${SAMPLE_FLYE_DIR}/assembly.fasta" "Flye assembly.fasta for ${SAMPLE_ID}"
+        # Define output
+        FLYE_ASM="${SAMPLE_FLYE_DIR}/assembly.fasta"
 
+        # Rename outputs
         cd "${SAMPLE_FLYE_DIR}"
 
         mv assembly.fasta "${SAMPLE_ID}.${FLYE_PREFIX}.fasta"
@@ -341,201 +385,332 @@ do
         mv flye.log "${SAMPLE_ID}.${FLYE_PREFIX}.log"
         mv assembly_info.txt "${SAMPLE_ID}.${FLYE_PREFIX}.info.txt"
 
-        FLYE_FASTA="${SAMPLE_FLYE_DIR}/${SAMPLE_ID}.${FLYE_PREFIX}.fasta"
-
         echo "[INFO] Flye finished"
+    } >> "${SAMPLE_LOG}" 2>&1
 
-        ############################################
-        # MEDAKA
-        ############################################
+    FLYE_FASTA="${SAMPLE_FLYE_DIR}/${SAMPLE_ID}.${FLYE_PREFIX}.fasta"
+
+    # Checking flye output
+    if ! check_file_not_empty "${FLYE_FASTA}"; then
+        log_warn "Flye output file empty for ${SAMPLE_ID}"
+        status_fail "$SAMPLE_ID" "assembly" "flye_empty_assembly"
+        continue
+    fi
+
+    #RUN MEDAKA ASSEMBLY BLOCK
+    {    
         echo "[INFO] Running Medaka"
-        run_medaka "${CLEAN_FASTQ}" "${FLYE_FASTA}" "${SAMPLE_MEDAKA_DIR}"
+        # Running Medaka (safe mode)
+        run_safe "medaka" run_medaka "${CLEAN_FASTQ}" "${FLYE_FASTA}" "${SAMPLE_MEDAKA_DIR}"
 
-        require_file "${SAMPLE_MEDAKA_DIR}/consensus.fasta" "Medaka consensus.fasta for ${SAMPLE_ID}"
+        # Define output
+        MEDAKA_ASM="${SAMPLE_MEDAKA_DIR}/consensus.fasta"
 
-        ############################################
-        # CONTIG COVERAGE
-        ############################################
+        echo "[INFO] Medaka finished"
+    } >> "${SAMPLE_LOG}" 2>&1
+
+    # Checking medaka output
+    if ! check_file_not_empty "${MEDAKA_ASM}"; then
+        log_warn "Medaka output file empty for ${SAMPLE_ID}"
+        status_fail "$SAMPLE_ID" "assembly" "medaka_empty_output"
+        continue
+    fi
+
+    #RUN CONTIG COVERAGE BLOCK
+    {  
         echo "[INFO] Calculating contig coverage"
 
         if [[ "${RESUME}" == "true" && -f "${COV_PREFIX}.mosdepth.summary.txt" ]]; then
             echo "[SKIP] coverage ${SAMPLE_ID}"
         else
-            run_mosdepth \
+            # Running Mosdepth (safe mode)
+            run_safe "mosdepth" run_mosdepth \
             "${SAMPLE_MEDAKA_DIR}/consensus.fasta" \
             "${CLEAN_FASTQ}" \
             "${TMP_BAM}" \
             "${BAM}" \
             "${COV_PREFIX}"
-
+            
+            # Removing temporary files (BAM)
+            rm -f "${TMP_BAM}" "${BAM}" "${BAM}.bai"
         fi
 
-        rm -f "${TMP_BAM}"
-        rm -f "${BAM}"
-        rm -f "${BAM}.bai"
+        echo "[INFO] Contig coverage finished"
+    } >> "${SAMPLE_LOG}" 2>&1
 
-        ############################################
-        # FILTER CONTIGS BY COVERAGE
-        ############################################
+    # Checking mosdepth output
+    if ! check_file_not_empty "${COV_PREFIX}.mosdepth.summary.txt"; then
+        log_warn "Mosdepth output empty for ${SAMPLE_ID}"
+    fi
 
-        FILTERED_FASTA="${SAMPLE_MEDAKA_DIR}/consensus.filtered.fasta"
+    #RUN FILTER CONTIGS BLOCK
+    
+    FILTERED_FASTA="${SAMPLE_MEDAKA_DIR}/consensus.filtered.fasta"
+    FINAL_INPUT_FASTA="${SAMPLE_MEDAKA_DIR}/consensus.fasta"
+    SUMMARY="${COV_PREFIX}.mosdepth.summary.txt"
+
+    # Checking input for filtering
+    if ! check_file_not_empty "${SUMMARY}"; then
+        log_warn "Missing mosdepth summary for ${SAMPLE_ID}, skipping filtering"
+        status_skip "$SAMPLE_ID" "assembly" "missing_coverage"
+        continue
+    fi
+
+    {
+        echo "[INFO] Filtering contigs by coverage"
 
         if [[ "${FILTER_CONTIGS}" == "true" ]]; then
-            echo "[INFO] Filtering contigs by coverage"
 
-            SUMMARY="${COV_PREFIX}.mosdepth.summary.txt"
-
-            require_file "${SUMMARY}" "mosdepth summary for ${SAMPLE_ID}"
-
-            # Get chromosome coverage (largest contig)
-
+            # GET CHROM COVERAGE
             CHROM_COV=$(awk '
             NR > 1 && $1 !~ /total/ {
                 print $4, $2
             }' "${SUMMARY}" | sort -k2,2nr | head -n1 | awk '{print $1}')
 
             echo "[INFO] Chromosome coverage: ${CHROM_COV}"
-
             MIN_COV=$(awk -v c="$CHROM_COV" -v f="$MIN_COV_FACTOR" 'BEGIN{print c*f}')
-
             echo "[INFO] Min coverage threshold: ${MIN_COV}"
 
-            # Select contigs
+            # SELECT CONTIGS
             awk -v mincov="$MIN_COV" -v minlen="$MIN_CONTIG_LENGTH" '
             NR > 1 && $1 !~ /total/ {
                 if ($4 >= mincov && $2 >= minlen) print $1
                 }' "${SUMMARY}" > "${SAMPLE_MEDAKA_DIR}/contigs.keep.txt"
 
-            # Filter FASTA
-            conda run -n "${ENV_ASSEMBLY}" seqkit grep \
-            -f "${SAMPLE_MEDAKA_DIR}/contigs.keep.txt" \
-            "${SAMPLE_MEDAKA_DIR}/consensus.fasta" \
-            > "${FILTERED_FASTA}"
-
-            FINAL_INPUT_FASTA="${FILTERED_FASTA}"
+            # FILTER FASTA
+            run_safe "filter_contigs" \
+                conda run -n "${ENV_ASSEMBLY}" seqkit grep \
+                -f "${SAMPLE_MEDAKA_DIR}/contigs.keep.txt" \
+                "${SAMPLE_MEDAKA_DIR}/consensus.fasta" \
+                > "${FILTERED_FASTA}"
         else
             FINAL_INPUT_FASTA="${SAMPLE_MEDAKA_DIR}/consensus.fasta"
         fi
 
-        ############################################
-        # SORTING AND RENAMING CONTIGS
-        ############################################
+        echo "[INFO] Filter contigs finished"
+    } >> "${SAMPLE_LOG}" 2>&1
 
+    # Checking filtering output
+    if [[ ! -s "${SAMPLE_MEDAKA_DIR}/contigs.keep.txt" ]]; then
+        log_warn "No contigs passed filtering for ${SAMPLE_ID}, using unfiltered assembly"
+        status_skip "$SAMPLE_ID" "assembly" "no_contigs_after_filtering"
+        continue
+    fi
+
+    if ! check_file_not_empty "${FILTERED_FASTA}"; then
+        log_warn "Filtering failed for ${SAMPLE_ID}"
+        FINAL_INPUT_FASTA="${SAMPLE_MEDAKA_DIR}/consensus.fasta"
+    fi
+
+    #RUN SORTING AND RENAMING CONTIGS BLOCK
+    
+    TMP_SORTED="${SAMPLE_MEDAKA_DIR}/consensus.sorted.fasta"
+    RENAMED_FASTA="${SAMPLE_MEDAKA_DIR}/${SAMPLE_ID}.${MEDAKA_PREFIX}.fasta"
+
+    # Checking input
+    if ! check_file_not_empty "${FINAL_INPUT_FASTA}"; then
+        log_warn "Input FASTA missing before renaming for ${SAMPLE_ID}"
+        continue
+    fi
+
+    {
         echo "[INFO] Sorting and renaming contigs"
-        TMP_SORTED="${SAMPLE_MEDAKA_DIR}/consensus.sorted.fasta"
-        RENAMED_FASTA="${SAMPLE_MEDAKA_DIR}/${SAMPLE_ID}.${MEDAKA_PREFIX}.fasta"
 
-        sort_and_rename_contigs \
+        # RUN RENAME (SAFE)
+        run_safe "rename_contigs" sort_and_rename_contigs \
             "${FINAL_INPUT_FASTA}" \
             "${RENAMED_FASTA}" \
             "${SAMPLE_ID}" \
             "${TMP_SORTED}"
 
-        # Making contig names
-        paste \
-        <(grep "^>" "$TMP_SORTED" | sed 's/>//') \
-        <(grep "^>" "$RENAMED_FASTA" | sed 's/>//') \
-        > "${SAMPLE_MEDAKA_DIR}/contig_name_map.tsv"
+        # GENERATE MAPPING
+        if [[ $(grep -c "^>" "$TMP_SORTED") -ne $(grep -c "^>" "$RENAMED_FASTA") ]]; then
+            log_warn "Mismatch in contig counts for ${SAMPLE_ID}, skipping mapping"
+        else
+            paste \
+            <(grep "^>" "$TMP_SORTED" | sed 's/>//') \
+            <(grep "^>" "$RENAMED_FASTA" | sed 's/>//') \
+            > "${SAMPLE_MEDAKA_DIR}/contig_name_map.tsv"
+        fi
 
-        rm -f "${TMP_SORTED}"
-        # rm -f "${SAMPLE_MEDAKA_DIR}/consensus.fasta"
+        # CLEANUP
+        rm -f "${TMP_SORTED}" 2>/dev/null || true
 
-        require_file "${RENAMED_FASTA}" "renamed Medaka fasta for ${SAMPLE_ID}"
+        echo "[INFO] sorting and renaming contigs finished"
+    } >> "${SAMPLE_LOG}" 2>&1
 
-        FINAL_INPUT_FASTA="${RENAMED_FASTA}"
+    FINAL_INPUT_FASTA="${RENAMED_FASTA}"
 
+    # Checking output
+    if ! check_file_not_empty "${RENAMED_FASTA}"; then
+        log_warn "Renamed FASTA missing for ${SAMPLE_ID}"
+        continue
+    fi
 
-        ############################################
-        # DNAAPLER
-        ############################################
+    #RUN DNAAPLER BLOCK
 
+    DNAAPLER_SAMPLE_DIR="${DNAAPLER_DIR}/${SAMPLE_ID}"
+    DNAAPLER_OUT="${DNAAPLER_SAMPLE_DIR}/dnaapler_reoriented.fasta"
+    DNAAPLER_CLEAN="${DNAAPLER_SAMPLE_DIR}/${SAMPLE_ID}.dnaapler.clean.fasta"
+    DNAAPLER_META="${DNAAPLER_SAMPLE_DIR}/${SAMPLE_ID}.dnaapler.metadata.tsv"
+
+    {
         if [[ "${RUN_DNAAPLER}" == "true" ]]; then
             echo "[INFO] Running dnaapler"
-
-            DNAAPLER_SAMPLE_DIR="${DNAAPLER_DIR}/${SAMPLE_ID}"
-            DNAAPLER_OUT="${DNAAPLER_SAMPLE_DIR}/dnaapler_reoriented.fasta"
-            DNAAPLER_CLEAN="${DNAAPLER_SAMPLE_DIR}/${SAMPLE_ID}.dnaapler.clean.fasta"
-            DNAAPLER_META="${DNAAPLER_SAMPLE_DIR}/${SAMPLE_ID}.dnaapler.metadata.tsv"
 
             if [[ "${RESUME}" == "true" && -f "${DNAAPLER_CLEAN}" ]]; then
                 echo "[SKIP] dnaapler ${SAMPLE_ID}"
             else
-                run_dnaapler "${RENAMED_FASTA}" "${DNAAPLER_SAMPLE_DIR}"
+                if ! run_safe "dnaapler" run_dnaapler "${RENAMED_FASTA}" "${DNAAPLER_SAMPLE_DIR}"; then
+                    log_warn "dnaapler failed for ${SAMPLE_ID}, continue to next file"
+                    FINAL_INPUT_FASTA="${RENAMED_FASTA}"
+                else
 
-                require_file "${DNAAPLER_OUT}" "dnaapler output for ${SAMPLE_ID}"
-                extract_dnaapler_metadata "${DNAAPLER_OUT}" "${DNAAPLER_META}"
-                clean_dnaapler_headers "${DNAAPLER_OUT}" "${DNAAPLER_CLEAN}"
+                    #Check output
+                    if ! check_file_not_empty "${DNAAPLER_OUT}"; then
+                        log_warn "Dnaapler output empty for ${SAMPLE_ID}"
+                        FINAL_INPUT_FASTA="${RENAMED_FASTA}"
+                    else
+                        extract_dnaapler_metadata "${DNAAPLER_OUT}" "${DNAAPLER_META}"
+                        clean_dnaapler_headers "${DNAAPLER_OUT}" "${DNAAPLER_CLEAN}"
+                    fi
+                fi
             fi
-
-            rm -rf "${DNAAPLER_SAMPLE_DIR}/logs" 2>/dev/null || true
-            rm -f "${DNAAPLER_SAMPLE_DIR}/*_output.txt"
-            rm -f "${DNAAPLER_SAMPLE_DIR}/dnaapler_*.log"
-
-            FINAL_INPUT_FASTA="${DNAAPLER_CLEAN}"
-        else
-            FINAL_INPUT_FASTA="${RENAMED_FASTA}"
         fi
+        
+        # removing temporary files
+        rm -rf "${DNAAPLER_SAMPLE_DIR}/logs" 2>/dev/null || true
+        rm -f "${DNAAPLER_SAMPLE_DIR}"/*_output.txt 2>/dev/null || true
+        rm -f "${DNAAPLER_SAMPLE_DIR}"/dnaapler_*.log 2>/dev/null || true
 
-        ############################################
-        # HYBRID ASSEMBLY
-        ############################################
+        echo "[INFO] Dnaapler finished"
+    } >>"${SAMPLE_LOG}" 2>&1
 
+    #Final input
+    if [[ -f "${DNAAPLER_CLEAN}" ]]; then
+        FINAL_INPUT_FASTA="${DNAAPLER_CLEAN}"
+    else
+        FINAL_INPUT_FASTA="${RENAMED_FASTA}"
+    fi
+
+
+    #RUN HYBRID ASSEMBLY POLISH BLOCK
+
+    {
         if [[ "${ASM_TYPE}" == "hybrid" ]]; then
             SHORT_R1_PATH="${RAW_DIR}/${SHORT_R1}"
             SHORT_R2_PATH="${RAW_DIR}/${SHORT_R2}"
-            require_file "${SHORT_R1_PATH}" "short_r1 for ${SAMPLE_ID}"
-            require_file "${SHORT_R2_PATH}" "short_r2 for ${SAMPLE_ID}"
-
             SAMPLE_PYPOLCA_DIR="${SAMPLE_MEDAKA_DIR}/pypolca"
 
-            echo "[INFO] Running pypolca"
-            run_pypolca "${FINAL_INPUT_FASTA}" "${SHORT_R1_PATH}" "${SHORT_R2_PATH}" "${SAMPLE_ID}" "${SAMPLE_PYPOLCA_DIR}"
+            # CHECK SHORT READS
+            if ! check_file_not_empty "${SHORT_R1_PATH}" || ! check_file_not_empty "${SHORT_R2_PATH}"; then
+                log_warn "Missing short reads for ${SAMPLE_ID}, skipping hybrid polishing"
+                # fallback → keep current assembly
+            else
 
-            PYPOLCA_FASTA="${SAMPLE_PYPOLCA_DIR}/${SAMPLE_ID}_corrected.fasta"
-            require_file "${PYPOLCA_FASTA}" "pypolca polished fasta for ${SAMPLE_ID}"
+                echo "[INFO] Running pypolca"
+                # RUN SAFE
+                if ! run_safe "pypolca" run_pypolca \
+                    "${FINAL_INPUT_FASTA}" \
+                    "${SHORT_R1_PATH}" \
+                    "${SHORT_R2_PATH}" \
+                    "${SAMPLE_ID}" \
+                    "${SAMPLE_PYPOLCA_DIR}"
+                then
+                    log_warn "pypolca failed for ${SAMPLE_ID}, using unpolished assembly"
+                else
+                    PYPOLCA_FASTA="${SAMPLE_PYPOLCA_DIR}/${SAMPLE_ID}_corrected.fasta"
 
-            FINAL_INPUT_FASTA="${PYPOLCA_FASTA}"
+                    # CHECK OUTPUT
+                    if ! check_file_not_empty "${PYPOLCA_FASTA}"; then
+                        log_warn "pypolca output empty for ${SAMPLE_ID}, skipping"
+                    else
+                        FINAL_INPUT_FASTA="${PYPOLCA_FASTA}"
+                    fi
+                fi
+            fi
         fi
+        echo "[INFO] hybrid assembly polish finished"            
+    } >> "${SAMPLE_LOG}" 2>&1
 
+    #RUN GENERATE CONTIG STATS BLOCK
 
-        ############################################
-        # GENERATE CONTIG STATS
-        ############################################
+    # Checking input files
+    #Check input contig_name
+    if ! check_file_not_empty "${SAMPLE_MEDAKA_DIR}/contig_name_map.tsv"; then
+        log_warn "Missing contig map for ${SAMPLE_ID}"
+        continue
+    fi
 
+    #Check empty file coverage
+    if ! check_file_not_empty "${COV_PREFIX}.mosdepth.summary.txt"; then
+        log_warn "Missing mosdepth summary for ${SAMPLE_ID}"
+        continue
+    fi
+
+    # Minimum coverage value
+    if [[ -z "${MIN_COV:-}" ]]; then
+        log_warn "MIN_COV not set, using default 1"
+        MIN_COV=1
+    fi
+
+    {
         if [[ "${RUN_DNAAPLER}" != "true" || ! -f "${DNAAPLER_META}" ]]; then
             echo "[INFO] No dnaapler metadata, using empty file"
             DNAAPLER_META="${SAMPLE_MEDAKA_DIR}/empty_dnaapler.tsv"
-            : > "${DNAAPLER_META}"
+            [[ ! -f "$DNAAPLER_META" ]] && : > "${DNAAPLER_META}"
         fi
 
         if [[ "${GENERATE_CONTIG_STATS}" == "true" ]]; then
 
             echo "[INFO] Generating contig stats for ${SAMPLE_ID}"
 
-            if [[ -z "${MIN_COV:-}" ]]; then
-                MIN_COV=0
+            #Run contig stats python
+            if ! run_safe "contig_stats" \
+                conda run -n "${ENV_ANALYSIS}" python3 \
+                "${SCRIPT_CONTIGS_STATS}" \
+                --sample "${SAMPLE_ID}" \
+                --map "${SAMPLE_MEDAKA_DIR}/contig_name_map.tsv" \
+                --meta "${DNAAPLER_META}" \
+                --mosdepth "${COV_PREFIX}.mosdepth.summary.txt" \
+                --min-cov "${MIN_COV}" \
+                --out "${COVERAGE_DIR}/${SAMPLE_ID}.contig.stats.tsv"
+            then
+                log_warn "contig stats failed for ${SAMPLE_ID}"
             fi
-
-            conda run -n "${ENV_ANALYSIS}" python3 \
-            "${SCRIPT_CONTIGS_STATS}" \
-            --sample "${SAMPLE_ID}" \
-            --map "${SAMPLE_MEDAKA_DIR}/contig_name_map.tsv" \
-            --meta "${DNAAPLER_META}" \
-            --mosdepth "${COV_PREFIX}.mosdepth.summary.txt" \
-            --min-cov "${MIN_COV}" \
-            --out "${COVERAGE_DIR}/${SAMPLE_ID}.contig.stats.tsv"
         fi
 
-        ############################################
-        # FINAL ASSEMBLY
-        ############################################
-        cp "${FINAL_INPUT_FASTA}" "${FINAL_ASM_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
-
-        require_file "${FINAL_ASM_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta" "final assembly for ${SAMPLE_ID}"
-
-        echo "[INFO] Final assembly written to: ${FINAL_ASM_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
         echo "[INFO] Sample ${SAMPLE_ID} completed successfully"
-    } > "${SAMPLE_LOG}" 2>&1
+    } >> "${SAMPLE_LOG}" 2>&1
+
+    ############################################
+    # FINAL ASSEMBLY
+    ############################################
+
+    FINAL_OUT="${FINAL_ASM_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
+
+    echo "[INFO] Final assembly written to: ${FINAL_OUT}"
+    
+    # CHECK INPUT
+    if ! check_file_not_empty "${FINAL_INPUT_FASTA}"; then
+        log_warn "Final input FASTA missing for ${SAMPLE_ID}, skipping final assembly"
+        continue
+    fi
+
+    # COPY (SAFE)
+    if ! run_safe "final_copy" cp "${FINAL_INPUT_FASTA}" "${FINAL_OUT}"; then
+        log_warn "Failed to write final assembly for ${SAMPLE_ID}"
+        continue
+    fi
+
+    # VALIDATE OUTPUT
+    if ! check_file_not_empty "${FINAL_OUT}"; then
+        log_warn "Final assembly empty for ${SAMPLE_ID}"
+        continue
+    fi
+
+    #FINAL LOG STATUS
+    status_ok "$SAMPLE_ID" "assembly"
 
     echo "Done: ${SAMPLE_ID}"
 done < <(tail -n +2 "${SAMPLES}")
@@ -552,6 +727,10 @@ else
     head -n1 "$first_file" > "$OUT_ALL"
     tail -n +2 -q "${files[@]}" >> "$OUT_ALL"
 fi
+
+#Final log info
+log_info "Assembly step completed for all samples"
+awk '$2=="assembly"' "${STATUS_FILE}"
 
 echo
 echo "[INFO] ASSEMBLY module completed"

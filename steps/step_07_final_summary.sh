@@ -70,6 +70,15 @@ fi
 
 require_file "${SAMPLES}" "samples file"
 
+############################################
+# STATUS FILE
+############################################
+
+STATUS_FILE="${ROOT_DIR}/results/pipeline_status.tsv"
+init_status_file
+
+export STATUS_FILE
+export UTILS_FILE
 
 ############################################
 # DIRECTORIES
@@ -116,7 +125,8 @@ for f in \
     "${MOBTYPER_FILE}"
 do
     if [[ ! -f "${f}" ]]; then
-        echo "ERROR: required input file not found: ${f}"
+        log_error "Missing input file"
+        status_fail "GLOBAL" "final_summary" "missing_input"
         exit 1
     fi
 done
@@ -135,6 +145,15 @@ if [[ ! -d "${BAKTA_DIR}" ]]; then
     echo "ERROR: Bakta directory not found: ${BAKTA_DIR}"
     exit 1
 fi
+
+for sample in "${CHECKM2_FILE}" "${TAXONOMY_FILE}" "${MLST_FILE}" "${AMR_FILE}" "${PLASMIDFINDER_FILE}" "${MOBTYPER_FILE}"; do
+    if [[ ! -f "${sample}" ]]; then
+        log_error "Missing critical input file: $sample"
+        status_start "GLOBAL" "final_summary"
+        status_fail "GLOBAL" "final_summary" "missing_input_$(basename "$sample")"
+        exit 1
+    fi
+done
 
 ############################################
 # RUN MERGE
@@ -157,6 +176,10 @@ echo "Output XLSX          : ${OUT_XLSX}"
 echo "ENV_ANALYSIS         : ${ENV_ANALYSIS}"
 echo "=================================================="
 
+#Status global
+status_start "GLOBAL" "final_summary"
+
+set +e
 conda run --no-capture-output -n "${ENV_ANALYSIS}" python3 \
     "${SCRIPT_MERGE_FINAL_REPORT}" \
     --samples "${SAMPLES}" \
@@ -173,5 +196,22 @@ conda run --no-capture-output -n "${ENV_ANALYSIS}" python3 \
     --out-xlsx "${OUT_XLSX}" \
     > "${FINAL_SUMMARY_LOG_DIR}/merge_final_report.stdout.log" \
     2> "${FINAL_SUMMARY_LOG_DIR}/merge_final_report.stderr.log"
+status=$?
+set -e
+
+if [[ $status -ne 0 ]]; then
+    status_fail "GLOBAL" "final_summary" "merged_failed"
+    exit 1
+fi
+
+#Check output
+if ! check_file_not_empty "${OUT_TSV}"; then
+    status_fail "GLOBAL" "final_summary" "empty_output"
+    exit 1
+fi
+
+#Final log info
+log_info "final_summary step completed for all samples"
+status_ok "GLOBAL" "final_summary"
 
 echo "[DONE] Final summary written to: ${FINAL_SUMMARY_DIR}"

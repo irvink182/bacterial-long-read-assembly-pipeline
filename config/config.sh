@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 
 ####################################
+# PIPELINE METADATA
+####################################
+
+PIPELINE_NAME="Bacterial WGS long-read/hybrid assembly"
+PIPELINE_VERSION="1.3"
+PIPELINE_AUTHOR="Irving Cancino-Muñoz"
+PIPELINE_INSTITUTION="University of Valencia/ FISABIO Public Health"
+
+####################################
 # GENERAL
 ####################################
 
@@ -16,9 +25,10 @@ SAMPLE_LIST_DEFAULT="${SAMPLE_LIST_DEFAULT:-samplesheet.tsv}"
 
 ####################################
 # MAIN RESULTS DIRECTORIES
-####################################
+####################################	
 
 RESULTS_DIR="${RESULTS_DIR:-results}"
+STATUS_FILE="${STATUS_FILE:-${RESULTS_DIR}/pipeline_status.tsv}"
 
 READS_RESULTS_DIR="${READS_RESULTS_DIR:-${RESULTS_DIR}/reads}"
 ASSEMBLY_RESULTS_DIR="${ASSEMBLY_RESULTS_DIR:-${RESULTS_DIR}/assemblies}"
@@ -68,6 +78,8 @@ SYLPH_TABLE_DIR="${SYLPH_TABLE_DIR:-${SYLPH_DIR}/sylph_tables}"
 
 FLYE_DIR="${FLYE_DIR:-${ASSEMBLY_RESULTS_DIR}/flye_asm}"
 MEDAKA_DIR="${MEDAKA_DIR:-${ASSEMBLY_RESULTS_DIR}/medaka_asm}"
+DNAAPLER_DIR="${DNAAPLER_DIR:-${ASSEMBLY_RESULTS_DIR}/dnappler_asm}"
+COVERAGE_DIR="${COVERAGE_DIR:-${ASSEMBLY_RESULTS_DIR}/coverage_asm}"
 FINAL_ASM_DIR="${FINAL_ASM_DIR:-${ASSEMBLY_RESULTS_DIR}/final_asm}"
 
 ####################################
@@ -196,7 +208,17 @@ FLYE_ITERATIONS="${FLYE_ITERATIONS:-3}"
 MEDAKA_MODEL="${MEDAKA_MODEL:-r1041_e82_400bps_sup_v5.2.0}"
 MEDAKA_BATCH_SIZE="${MEDAKA_BATCH_SIZE:-50}"
 
-QUAST_MIN_CONTIG="${QUAST_MIN_CONTIG:-500}"
+RUN_DNAAPLER="${RUN_DNAAPLER:-true}"
+DNAAPLER_MODE="${DNAAPLER_MODE:-all}"
+
+# --- Contig filtering ---
+FILTER_CONTIGS="${FILTER_CONTIGS:-true}"        # activate contig filtering step
+MIN_COV_FACTOR="${MIN_COV_FACTOR:-0.3}"         # proportion to chromosome
+MIN_CONTIG_LENGTH="${MIN_CONTIG_LENGTH:-1000}"  # opcional: filter small contigs
+
+GENERATE_CONTIG_STATS="${GENERATE_CONTIG_STATS:-true}"
+
+QUAST_MIN_CONTIG="${QUAST_MIN_CONTIG:-1000}"
 
 ####################################
 # TAXONOMY
@@ -244,6 +266,9 @@ SYLPH_THREADS="${SYLPH_THREADS:-12}"
 
 FLYE_THREADS="${FLYE_THREADS:-12}"
 MEDAKA_THREADS="${MEDAKA_THREADS:-12}"
+MINIMAP_THREADS="${MINIMAP_THREADS:-12}"
+SAMTOOLS_THREADS="${SAMTOOLS_THREADS:-8}"
+DNAAPLER_THREADS="${DNAAPLER_THREADS:-8}"
 
 PYPOLCA_THREADS="${PYPOLCA_THREADS:-10}"
 
@@ -286,10 +311,10 @@ MOBSUITE_THREADS="${MOBSUITE_THREADS:-12}"
 
 #### Main environments
 ENV_TRIMMING="${ENV_TRIMMING:-env_trim_longreads}"
-ENV_SYLPH="${ENV_SYLPH:-env_sylph}"
+ENV_SYLPH="${ENV_SYLPH:-sylph}"
 ENV_ASSEMBLY="${ENV_ASSEMBLY:-env_assembly}"
 ENV_QUAST="${ENV_QUAST:-env_quast}"
-ENV_CHECKM2="${ENV_CHECKM2:-env_checkm2}"
+ENV_CHECKM2="${ENV_CHECKM2:-checkm2}"
 ENV_TAXONOMY="${ENV_TAXONOMY:-env_taxonomy}"
 ENV_ANNOTATION="${ENV_ANNOTATION:-env_annotation}"
 ENV_CHARACTERIZATION="${ENV_CHARACTERIZATION:-env_characterization}"
@@ -298,13 +323,15 @@ ENV_CHARACTERIZATION="${ENV_CHARACTERIZATION:-env_characterization}"
 #ENV_MOBSUITE="${ENV_MOBSUITE:-mob_suite}"
 #ENV_PLASMIDFINDER="${ENV_PLASMIDFINDER:-epitools}"
 
-ENV_ANALYSIS="${ENV_ANALYSIS:-env_analysis}"
+ENV_ANALYSIS="${ENV_ANALYSIS:-python_r_utils_env}"
 
 #### Helper scripts
 RSCRIPT_PLOT="${RSCRIPT_PLOT:-scripts/abundance_species_plot.R}"
 MERGE_TAXONOMY_BIN="${MERGE_TAXONOMY_BIN:-scripts/merge_taxonomy_reports.py}"
+#SCRIPT_CONTIGS_STATS="${SCRIPT_CONTIGS_STATS:-scripts/generate_contigs_stats.py}"
 #SCRIPT_SUMMARY="${SCRIPT_SUMMARY:-amrfinder_unique_symbols_by_type_and_class.py}"
 #SCRIPT_MATRIX="${SCRIPT_MATRIX:-amrfinder_presence_absence_by_type.py}"
 #SCRIPT_HEATMAP="${SCRIPT_HEATMAP:-plot_amrfinder_heatmap_amr_virulence.py}"
 #SCRIPT_PLASMIDFINDER_SUMMARY="${SCRIPT_PLASMIDFINDER_SUMMARY:-summarize_plasmidfinder.py}"
 SCRIPT_MERGE_FINAL_REPORT="${SCRIPT_MERGE_FINAL_REPORT:-scripts/merge_final_report.py}"
+SCRIPT_PIPELINE_SUMMARY="${SCRIPT_PIPELINE_SUMMARY:-scripts/pipeline_summary.py}"

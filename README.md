@@ -1,4 +1,4 @@
-# Bacterial WGS long-read / hybrid pipeline (v1.2)
+# Bacterial WGS long-read / hybrid pipeline (v1.3)
 A modular pipeline for bacterial genome assembly and genomic characterization using long-read sequencing data, with optional short-read polishing for hybrid workflows.
 
 ## Overview
@@ -12,8 +12,9 @@ This pipeline processes bacterial sequencing data from raw reads to a final inte
 - Annotation
 - Genomic characterization
 - Final Summary Table
+- Run sumary report
 
-The workflow is currently implemented as a series of modular Bash scripts (`step_01` to `step_08`) invoked through a main launcher script (`run_all_pipeline.sh`).
+The workflow is currently implemented as a series of modular Bash scripts (`step_01` to `step_09`) invoked through a main launcher script (`run_all_pipeline.sh`).
 
 Two analysis modes are supported:
 
@@ -27,6 +28,11 @@ Please note that `hybrid` mode refers to:
 - short-read polishing with `pypolca`
 
 It does **not** perform true hybrid *de novo* assembly with a dedicated hybrid assembler.
+
+## Reportig & Visual results
+The pipeline consolidates all generated data into two main executive reports located in `results/final_summary`:
+1) `Final summary table`: A comprehensive master table that integrates all analytical outcomes per sample. This includes sequencing depth, assembly metrics, taxonomic identification, and genomic features (AMR profiles, plasmid typing, and MLST)
+2) `Pipeline_status_report`: A report designed for run validation and troubleshooting. We have added a tracking system through all pipeline steps. In addition, it provides an automated summary of Succes metrics to evaluate the overall performance of the run.
 
 ## Workflow design
 
@@ -42,6 +48,7 @@ long reads
   -> Annotation (Bakta)
   -> Genomic characterization (amrfinder, mob_typer, plasmidfinder)
   -> Final Summary Table
+  -> Run Summary report
 ```
 ### `hybrid` mode
 ```text
@@ -56,6 +63,7 @@ long reads + short reads
   -> Annotation (Bakta)
   -> Genomic characterization (amrfinder, mob_typer, plasmidfinder)
   -> Final Summary Table
+  -> Run Summary report
 ```
 ## Proposed layout
 ```text
@@ -83,7 +91,10 @@ Project/
 │   ├── final_summary/
 │   ├── quality_check/
 │   ├── reads/
-│   └── taxonomy/
+│   ├── taxonomy/
+│   ├── pipeline_status_report.tsv
+│   ├── pipeline_status_report.xlsx
+│   └── pipeline_status_report.html
 ├── scripts/
 │   ├── abundance_species_plot.R
 │   ├── amrfinder_presence_absence_by_type.py
@@ -91,6 +102,7 @@ Project/
 │   ├── generate_contigs_stats.py
 │   ├── merge_final_report.py
 │   ├── merge_taxonomy_reports.py
+│   ├── pipeline_summary.py
 │   ├── plot_amrfinder_heatmap_amr_virulence.py
 │   ├── summarize_plasmidfinder.py
 │   └── utils.sh
@@ -101,8 +113,9 @@ Project/
 │   ├── step_04_taxonomy.sh
 │   ├── step_05_annotation.sh
 │   ├── step_06_characterization.sh
-│   └── step_07_final_summary.sh
-│   └── step_08_cleanup.sh
+│   ├── step_07_final_summary.sh
+│   ├── step_08_cleanup.sh
+│   └── step_09_pipeline_summary.sh
 ├── run_all_pipeline.sh
 ├── run_pipeline.sh
 ├── samplesheet.tsv
@@ -257,10 +270,16 @@ Final reporting:
 - Final report per-sample
 
 ### `step_08_cleanup.sh`
-Removo instermediate files:
+Remove intermediate files:
 - Assembly intermediate files: `Flye` `Medaka`
 - Reads prefiltering files: `porechop`
-- Temporary fules from characterization tools
+- Temporary files from characterization tools
+
+### `step_09_pipeline_summary.sh`
+Generate run summary report in:
+- TSV format
+- Excel format
+- HTML format
 
 ### Input samplesheet
 
@@ -302,6 +321,7 @@ Main output directories are written to `results/`:
 - `results/annotation/`: Bakta annotations
 - `results/characterization/`: AMR, plasmid, & MLST typing results
 - `results/final_summary/`: Final merged summary report
+- `results/pipeline_status_report/`: run summary report in TSV, Excel, and HTML formats.
 
 
 ## Software requirements

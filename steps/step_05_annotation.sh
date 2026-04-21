@@ -92,6 +92,16 @@ mkdir -p "${ANNOTATION_SUMMARY_DIR}"
 mkdir -p "${ANNOTATION_LOG_DIR}"
 
 ############################################
+# STATUS FILE
+############################################
+
+STATUS_FILE="${ROOT_DIR}/results/pipeline_status.tsv"
+init_status_file
+
+export STATUS_FILE
+export UTILS_FILE
+
+############################################
 # CHECK CONDA ENV
 ############################################
 
@@ -156,6 +166,25 @@ do
     echo "Processing sample: ${SAMPLE_ID}"
     echo "--------------------------------------------------"
 
+    # --- FILTERS FOR EMPTY/FAILED SAMPLES ---
+    # # Checking if the sample failed in previous steps
+    if grep -qE "${SAMPLE_ID}.*FAILED" "${STATUS_FILE}"; then
+        log_warn "Skipping ${SAMPLE_ID}: Sample has FAILED status in previous steps."
+        continue
+    fi
+
+    # Checking if the sample has assembly, if not, SKIPPED.
+    ASSEMBLY_FASTA="${INPUT_FASTA_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
+    
+    if [[ ! -f "${ASSEMBLY_FASTA}" || ! -s "${ASSEMBLY_FASTA}" ]]; then
+        log_warn "Assembly not found for ${SAMPLE_ID}. Marking as SKIPPED in QC."
+        status_skip "$SAMPLE_ID" "annotation" "missing_assembly"
+        continue
+    fi
+
+    #Status per file
+    status_start "$SAMPLE_ID" "annotation"
+    
     validate_asm_type "${ASM_TYPE}"
 
     if is_na "${EXPECTED_GENOME_SIZE}"; then
@@ -165,33 +194,57 @@ do
     fi
 
     ASSEMBLY_FASTA="${INPUT_FASTA_DIR}/${SAMPLE_ID}.${FINAL_ASM_PREFIX}.fasta"
-    require_file "${ASSEMBLY_FASTA}" "assembly FASTA for ${SAMPLE_ID}"
     
     SAMPLE_BAKTA_DIR="${BAKTA_DIR}/${SAMPLE_ID}"
+    BAKTA_FILE="${SAMPLE_BAKTA_DIR}/${SAMPLE_ID}.gff3"
     SAMPLE_LOG="${ANNOTATION_LOG_DIR}/${SAMPLE_ID}.bakta.log"
-
-    # RESUME LOGIC
-    should_skip_sample "${SAMPLE_LOG}" && continue
 
     mkdir -p "${SAMPLE_BAKTA_DIR}"
 
-    if [[ ! -f "${ASSEMBLY_FASTA}" ]]; then
-        echo "ERROR: final assembly not found for ${SAMPLE_ID}: ${ASSEMBLY_FASTA}"
-        exit 1
+    # =========================
+    # Checking inputs
+    # =========================
+
+    #Checking input assembly
+    if ! check_file_not_empty "${ASSEMBLY_FASTA}"; then
+        log_warn "Assembly not found: ${SAMPLE_ID}"
+        status_skip "$SAMPLE_ID" "annotation" "missing_assembly"
+        continue
     fi
 
-    {
-        echo "[INFO] Sample: ${SAMPLE_ID}"
-        echo "[INFO] Assembly: ${ASSEMBLY_FASTA}"
+    # RESUME LOGIC
+    if should_skip_sample "${BAKTA_FILE}"; then
+        status_skip "$SAMPLE_ID" "annotation" "resume_existing_output"
+        continue
+    fi
 
-        echo "[INFO] Running Bakta"
-        run_bakta "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_BAKTA_DIR}"
+    echo "[INFO] Sample: ${SAMPLE_ID}"
+    echo "[INFO] Assembly: ${ASSEMBLY_FASTA}"
+    
+    # =========================
+    # BAKTA
+    # =========================
+    #RUN BAKTA BLOCK
+
+    {
+        echo "[INFO] Running Bakta: ${SAMPLE_ID}"
+        run_safe "bakta" run_bakta "${SAMPLE_ID}" "${ASSEMBLY_FASTA}" "${SAMPLE_BAKTA_DIR}"
 
         echo "[INFO] Creating no-sequence GBFF"
-        make_nosequence_gbff "${SAMPLE_ID}" "${SAMPLE_BAKTA_DIR}"
+        run_safe "gbff" make_nosequence_gbff "${SAMPLE_ID}" "${SAMPLE_BAKTA_DIR}"
 
-        echo "[INFO] Sample ${SAMPLE_ID} completed successfully"
-    } > "${SAMPLE_LOG}" 2>&1
+        echo "[INFO] Bakta annotation finished: ${SAMPLE_ID}"
+    } >> "${SAMPLE_LOG}" 2>&1
+    
+    # Checking bakta output
+    if ! check_file_not_empty "${BAKTA_FILE}"; then
+        log_warn "Bakta output file empty for ${SAMPLE_ID}"
+        status_fail "$SAMPLE_ID" "annotation" "bakta_failed"
+        continue
+    fi
+
+    #FINAL LOG STATUS
+    status_ok "$SAMPLE_ID" "annotation"
 
     echo "Done: ${SAMPLE_ID}"
 
@@ -215,14 +268,26 @@ else
     multiqc . --force --cl-config "max_table_rows: 3000" \
     > "${ANNOTATION_LOG_DIR}/multiqc_bakta.stdout.log" \
     2> "${ANNOTATION_LOG_DIR}/multiqc_bakta.stderr.log" || true
-    
-    mv multiqc_report.html multiqc_bakta_report.html
-    cp multiqc_bakta_report.html "${ANNOTATION_SUMMARY_DIR}/"
-    mv multiqc_data/multiqc_bakta.txt multiqc_data/multiqc_bakta_report.tsv
-    cp multiqc_data/multiqc_bakta_report.tsv "${ANNOTATION_SUMMARY_DIR}/"
+
+    if [[ -f multiqc_report.html ]]; then
+        mv multiqc_report.html multiqc_bakta_report.html
+        cp multiqc_bakta_report.html "${ANNOTATION_SUMMARY_DIR}/"
+    else
+        log_warn "MultiQC HTML report not generated"
+    fi
+
+    if [[ -f multiqc_data/multiqc_bakta.txt ]]; then
+        mv multiqc_data/multiqc_bakta.txt multiqc_data/multiqc_bakta_report.tsv
+        cp multiqc_data/multiqc_bakta_report.tsv "${ANNOTATION_SUMMARY_DIR}/"
+    else
+        log_warn "MultiQC table not generated"
+    fi
 
     cd "${ROOT_DIR}"
 fi
 
+#Final log info
+log_info "Annotation step completed for all samples"
+awk '$2=="annotation"' "${STATUS_FILE}"
 echo "[INFO] ANNOTATION module completed"
 echo "[DONE] Outputs written to: ${ROOT_DIR}/${ANNOTATION_RESULTS_DIR}"

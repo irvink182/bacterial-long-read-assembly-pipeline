@@ -74,6 +74,16 @@ require_file "${SAMPLES}" "samples file"
 export RESUME
 export FORCE
 
+############################################
+# STATUS FILE
+############################################
+
+STATUS_FILE="${ROOT_DIR}/results/pipeline_status.tsv"
+init_status_file
+
+export STATUS_FILE
+export UTILS_FILE
+
 # =========================
 # Info
 # =========================
@@ -105,7 +115,9 @@ COVERAGE_DIR="${RESULTS_DIR}/assemblies/coverage_asm"
 remove_path() {
     local path="$1"
 
-    [[ ! -e "$path" ]] && return
+    # if varible is empty, abort for safety
+    [[ -z "${path}" || "${path}" == "/" ]] && return 0
+    [[ ! -e "$path" ]] && return 0
 
     if [[ "${DRY_RUN}" == "true" ]]; then
         echo "[DRY-RUN] Would remove: $path"
@@ -195,13 +207,39 @@ echo "=================================================="
 echo "STEP 08: CLEANUP"
 echo "=================================================="
 
-[[ "${RESUME}" == "true" ]] && log_info "Resume mode enabled"
 [[ "${FORCE}" == "true" ]] && log_info "Force mode enabled"
 [[ "${DRY_RUN}" == "true" ]] && log_info "Dry-run mode enabled"
 
-cleanup_reads_by_trimmer
-cleanup_assemblies
-cleanup_coverage_assemblies
-cleanup_plasmidfinder_tmp
+#Status global
+status_start "GLOBAL" "cleanup"
 
+# Load status file to know which samples were included in this run
+# We use 'trimming' step as a reference because is the first step in this pipeline
+cat "${STATUS_FILE}" | grep "trimming" | cut -f1 | sort -u | while read -r SID; do
+    
+    log_info "Cleaning up data for sample: ${SID}"
+    status_start "${SID}" "cleanup"
+
+    # Removing directories
+    cleanup_failed=0
+    
+    # Cleanup
+    cleanup_reads_by_trimmer "${SID}" || cleanup_failed=1
+    cleanup_plasmidfinder_tmp "${SID}" || cleanup_failed=1
+
+    if [[ $cleanup_failed -eq 0 ]]; then
+        status_ok "${SID}" "cleanup"
+    else
+        status_fail "${SID}" "cleanup" "partial_cleanup_error"
+    fi
+done
+
+# Delting shared directories for all samples
+cleanup_assemblies 
+cleanup_coverage_assemblies
+
+
+#Final log info
+log_info "cleanup step completed"
+status_ok "GLOBAL" "cleanup"
 echo "[INFO] Cleanup completed"
